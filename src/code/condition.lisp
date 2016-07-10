@@ -533,7 +533,7 @@
           (if (and type datum)
               (print-unreadable-object (condition stream :type t)
                 (format stream "~@<expected-type: ~
-                                 ~/sb-impl:print-type-specifier/~_datum: ~
+                                 ~/sb-impl:print-type-specifier/ ~_datum: ~
                                  ~A~:@>"
                         type datum))
               (call-next-method))))
