@@ -1,0 +1,99 @@
+
+CL-USER> 
+SBCL 1.3.21.203-30da90072-dirty  Port: 4005  Pid: 14681
+; SWANK 2.19
+CL-USER> (asdf:load-system :foo)
+; compiling file ".../sbcl/no-applicable-method/file1.lisp" (written 22 SEP 2017 09:00:36 AM):
+; compiling (IN-PACKAGE :CL-USER)
+; compiling (DEFSTRUCT FOO ...)
+
+; .../sbcl/no-applicable-method/file1-TMP.fasl written
+; compilation finished in 0:00:00.007
+; compiling file ".../sbcl/no-applicable-method/file2.lisp" (written 22 SEP 2017 09:00:05 AM):
+; compiling (IN-PACKAGE :CL-USER)
+; compiling (DEFMETHOD DO-THAT ...)
+; compiling (DEFPARAMETER *OBJ* ...)
+
+; .../sbcl/no-applicable-method/file2-TMP.fasl written
+; compilation finished in 0:00:00.004
+; compiling file ".../sbcl/no-applicable-method/file3.lisp" (written 22 SEP 2017 08:58:19 AM):
+; compiling (IN-PACKAGE :CL-USER)
+; compiling (DO-THAT (MAKE-FOO :SLOT1 ...))
+
+; .../sbcl/no-applicable-method/file3-TMP.fasl written
+; compilation finished in 0:00:00.001
+Yeah, got #S(FOO :SLOT1 42)!
+T
+CL-USER> (asdf:load-system :foo)
+; compiling file ".../sbcl/no-applicable-method/file1.lisp" (written 22 SEP 2017 09:00:44 AM):
+; compiling (IN-PACKAGE :CL-USER)
+; compiling (DEFSTRUCT FOO ...)
+
+; file: .../sbcl/no-applicable-method/file1.lisp
+; in: DEFSTRUCT FOO
+;     (DEFSTRUCT FOO (SLOT1 0 :TYPE FIXNUM) (SLOT3 0 :TYPE FIXNUM))
+; --> PROGN EVAL-WHEN 
+; ==>
+;   (SB-KERNEL::%COMPILER-DEFSTRUCT
+;    '#<SB-KERNEL:DEFSTRUCT-DESCRIPTION FOO {1007080B03}>
+;    '#(#<SB-KERNEL:LAYOUT for T {20300003}>
+;       #<SB-KERNEL:LAYOUT for STRUCTURE-OBJECT {20300103}>))
+; 
+; caught WARNING:
+;   change in instance length of class FOO:
+;     The most recently compiled length: 1
+;     the most recently loaded length: 2
+; 
+; caught WARNING:
+;   Clobbering the compiler's idea of the layout of #<STRUCTURE-CLASSOID FOO>.
+; 
+; caught STYLE-WARNING:
+;   The new FTYPE proclamation for COMMON-LISP-USER::MAKE-FOO
+;     (FUNCTION (&KEY (:SLOT1 FIXNUM) (:SLOT3 FIXNUM))
+;      (VALUES COMMON-LISP-USER::FOO &OPTIONAL))
+;   does not match the old FTYPE proclamation
+;     (FUNCTION (&KEY (:SLOT1 FIXNUM)) (VALUES COMMON-LISP-USER::FOO &OPTIONAL))
+
+; .../sbcl/no-applicable-method/file1-TMP.fasl written
+; compilation finished in 0:00:00.013
+COMPILE-FILE-ERROR while
+compiling #<CL-SOURCE-FILE "foo" "file1">
+   [Condition of type UIOP/LISP-BUILD:COMPILE-FILE-ERROR]
+; Evaluation aborted on NIL
+CL-USER> ; Quit to level 1
+CL-USER> ; compiling file ".../sbcl/no-applicable-method/file1.lisp" (written 22 SEP 2017 09:00:44 AM):
+; compiling (IN-PACKAGE :CL-USER)
+; compiling (DEFSTRUCT FOO ...)
+
+; .../sbcl/no-applicable-method/file1-TMP.fasl written
+; compilation finished in 0:00:00.013
+; compiling file ".../sbcl/no-applicable-method/file2.lisp" (written 22 SEP 2017 09:00:05 AM):
+; compiling (IN-PACKAGE :CL-USER)
+; compiling (DEFMETHOD DO-THAT ...)
+; compiling (DEFPARAMETER *OBJ* ...)
+
+; .../sbcl/no-applicable-method/file2-TMP.fasl written
+; compilation finished in 0:00:00.003
+; compiling file ".../sbcl/no-applicable-method/file3.lisp" (written 22 SEP 2017 08:58:19 AM):
+; compiling (IN-PACKAGE :CL-USER)
+; compiling (DO-THAT (MAKE-FOO :SLOT1 ...))
+
+; .../sbcl/no-applicable-method/file3-TMP.fasl written
+; compilation finished in 0:00:00.001
+Yeah, got #S(FOO :SLOT1 42 :SLOT3 0)!
+; 
+; compilation unit finished
+;   caught 2 WARNING conditions
+;   caught 1 STYLE-WARNING condition
+T
+CL-USER> (do-that (make-foo :slot1 42))
+There is no applicable method for the generic function
+  #<STANDARD-GENERIC-FUNCTION COMMON-LISP-USER::DO-THAT (1)>
+when called with arguments
+  (#S(FOO :SLOT1 42 :SLOT3 0)).
+   [Condition of type SIMPLE-ERROR]
+; Evaluation aborted on NIL
+CL-USER> ; Quit to level 1
+CL-USER> ; Evaluation aborted on #<SIMPLE-ERROR "~@<There is no applicable method for the generic function ~2I~_~S~
+;          ~I~_when called with arguments ~2I~_~S.~:>" {1007B4DC53}>
+CL-USER> 
