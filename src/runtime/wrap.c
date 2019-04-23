@@ -358,6 +358,7 @@ passwd_homedir(struct passwd *p)
                 if (nchars == len + 1) {
                     return result;
                 } else {
+                    free(result);
                     return 0;
                 }
             } else {
