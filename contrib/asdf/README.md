@@ -167,12 +167,12 @@ Using ASDF internals
 --------------------
 
 If you have to use or extend internal functionality not currently exported by
-ASDF, please contact us and have us negociate a proper, stable, tested interface
+ASDF, please contact us and have us negotiate a proper, stable, tested interface
 that you can actually rely on. Also, please *DO NOT* refer to specific
 subpackages such as `asdf/find-system` from the outside of ASDF, because
 functions may occasionally be moved from one internal package to the other,
 without notification. They have in the past and will in the future.
-Instead, when refering to symbols in ASDF, we recommend you either have
+Instead, when referring to symbols in ASDF, we recommend you either have
 your package `:use` the package `:asdf` or `:import-from` it, or that
 you shall use `asdf:` or `asdf::` as a prefix to the symbols.
 And once again, please contact us if you have to use non-exported symbols.
