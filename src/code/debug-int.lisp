@@ -2109,7 +2109,7 @@ register."
                  ;; debug info the compiler should have dumped.
                  ;;
                  ;; FIXME: This error and comment happen over and over again.
-                 ;; Make them a shared function.
+                 ;; Make them a shared function.   ?
                  (bug "unknown code location"))
                (compiled-code-location-%live-set code-location))
               (t live-set)))))

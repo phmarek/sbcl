@@ -638,7 +638,7 @@ requires exactly~;accepts at most~] one argument" keyword syntax-group)
                         (list option))
                        (t
                         ;; FIXME: ugly message (defstruct (s :include) a)
-                        ;; saying "unrecognized" when it means "bad syntax"
+                        ;; saying "unrecognized" when it means "bad syntax"  ?
                         (error "unrecognized DEFSTRUCT option: ~S" option)))
                  dd seen-options))))
     (case (dd-type dd)
