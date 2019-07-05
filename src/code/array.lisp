@@ -568,7 +568,7 @@
                         initial-element initial-contents
                         adjustable
                         fill-pointer
-                        displaced-to
+                        displaced-to ;; allow a SAP?
                         displaced-index-offset)
   (declare (ignore initial-element
                    initial-contents adjustable
@@ -579,7 +579,7 @@
 
 (defun make-static-vector (length &key
                            (element-type '(unsigned-byte 8))
-                           (initial-contents nil initial-contents-p)
+                           (initial-contents nil initial-contents-p) ;; allow a SAP?
                            (initial-element nil initial-element-p))
   "Allocate vector of LENGTH elements in static space. Only allocation
 of specialized arrays is supported."
