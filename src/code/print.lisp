@@ -1672,7 +1672,7 @@ variable: an unreadable object representing the error is printed instead.")
   (let ((position 0)
         (dot-position 0)
         (digit-characters "0123456789")
-        (e-min -3)
+        (e-min -3) ;; HERE
         (e-max 8))
     (%flonum-to-digits
      (lambda (d)
