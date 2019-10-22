@@ -66,9 +66,15 @@
                 :dont-save t)
       buffer)))
 
-(defun get-buffer ()
-  (or (and *available-buffers* (atomic-pop *available-buffers*))
-      (alloc-buffer)))
+
+(defun get-buffer (stream)
+  (let ((buffer-size (fd-stream-desired-buffer-size stream))
+        (cache (if buffer-size 
+                   *available-buffers*
+                   (fd-stream-buffer-list stream))))
+  (or (and  (atomic-pop cache))
+      (alloc-buffer :size (or buffer-size +bytes-per-buffer+)))))
+
 
 (declaim (inline reset-buffer))
 (defun reset-buffer (buffer)
@@ -76,9 +82,11 @@
         (buffer-tail buffer) 0)
   buffer)
 
-(defun release-buffer (buffer)
+(defun release-buffer (stream buffer)
   (reset-buffer buffer)
-  (atomic-push buffer *available-buffers*))
+  (if (fd-stream-desired-buffer-size stream)
+      (atomic-push buffer (fd-stream-buffer-list stream))
+      (atomic-push buffer *available-buffers*)))
 
 
 ;;;; the FD-STREAM structure
@@ -137,6 +145,9 @@
   ;; T if serve-event is allowed when this stream blocks
   (serve-events nil :type boolean)
 
+  ;; Only used for non-standard buffer sizes
+  (desired-buffer-size nil :type (or null fixnum))
+  (buffer-list nil :type list)
   ;; the input buffer
   (instead (make-array 0 :element-type 'character :adjustable t :fill-pointer t) :type (array character (*)))
   (ibuf nil :type (or buffer null))
@@ -171,13 +182,13 @@
 (defun release-fd-stream-buffers (fd-stream)
   (awhen (fd-stream-ibuf fd-stream)
     (setf (fd-stream-ibuf fd-stream) nil)
-    (release-buffer it))
+    (release-buffer fd-stream it))
   (awhen (fd-stream-obuf fd-stream)
     (setf (fd-stream-obuf fd-stream) nil)
-    (release-buffer it))
+    (release-buffer fd-stream it))
   (dolist (buf (fd-stream-output-queue fd-stream))
     (when (buffer-p buf)
-      (release-buffer buf)))
+      (release-buffer fd-stream buf)))
   (setf (fd-stream-output-queue fd-stream) nil))
 
 ;;;; FORM-TRACKING-STREAM
@@ -332,7 +343,7 @@
   (aver (fd-stream-serve-events stream))
   (let ((queue (fd-stream-output-queue stream))
         (later (list (or (fd-stream-obuf stream) (bug "Missing obuf."))))
-        (new (get-buffer)))
+        (new (get-buffer stream)))
     ;; Important: before putting the buffer on queue, give the stream
     ;; a new one. If we get an interrupt and unwind losing the buffer
     ;; is relatively OK, but having the same buffer in two places
@@ -370,7 +381,7 @@
            (cond ((eql count length)
                   ;; Complete write, see if we can do another right
                   ;; away, or remove the handler if we're done.
-                  (release-buffer buffer)
+                  (release-buffer stream buffer)
                   (cond ((fd-stream-output-queue stream)
                          (setf not-first-p t)
                          (go :pop-buffer))
@@ -1758,19 +1769,19 @@
       (if output-p
           (if obuf
               (reset-buffer obuf)
-              (setf (fd-stream-obuf fd-stream) (get-buffer)))
+              (setf (fd-stream-obuf fd-stream) (get-buffer fd-stream)))
           (when obuf
             (setf (fd-stream-obuf fd-stream) nil)
-            (release-buffer obuf))))
+            (release-buffer fd-stream obuf))))
 
     (let ((ibuf (fd-stream-ibuf fd-stream)))
       (if input-p
           (if ibuf
               (reset-buffer ibuf)
-              (setf (fd-stream-ibuf fd-stream) (get-buffer)))
+              (setf (fd-stream-ibuf fd-stream) (get-buffer fd-stream)))
           (when ibuf
             (setf (fd-stream-ibuf fd-stream) nil)
-            (release-buffer ibuf))))
+            (release-buffer fd-stream ibuf))))
 
     ;; FIXME: Why only for output? Why unconditionally?
     (when output-p
@@ -2238,6 +2249,7 @@
                        timeout
                        file
                        original
+                       desired-buffer-size
                        delete-original
                        pathname
                        input-buffer-p
@@ -2270,6 +2282,7 @@
                           :delete-original delete-original
                           :pathname pathname
                           :buffering buffering
+                          :desired-buffer-size desired-buffer-size
                           :dual-channel-p dual-channel-p
                           :element-mode element-mode
                           :serve-events serve-events
@@ -2372,6 +2385,7 @@
                (overlapped t)
                &aux                     ; Squelch assignment warning.
                (filename filename)
+               desired-buffer-size ; see also franz.com extensions-to-open3
                (direction direction)
                (if-does-not-exist if-does-not-exist)
                (if-exists if-exists))
