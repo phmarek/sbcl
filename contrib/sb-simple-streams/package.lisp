@@ -12,6 +12,7 @@
   (:import-from #:sb-kernel #:ansi-stream #:charpos #:line-length)
   (:import-from #:sb-gray #:fundamental-stream)
   (:import-from #:sb-impl
+                #:*bytes-per-buffer*
                 #:in-stream-from-designator #:out-stream-from-designator)
   ;; FIXME: Using deffoo! or equivalent might be nicer.
   (:implement #:common-lisp #:sb-impl)
@@ -54,6 +55,7 @@
    #:WITH-STREAM-CLASS #:SM #:FUNCALL-STM-HANDLER
    #:FUNCALL-STM-HANDLER-2 #:ADD-STREAM-INSTANCE-FLAGS
    #:REMOVE-STREAM-INSTANCE-FLAGS
+   #:*BYTES-PER-BUFFER*
    ;; User-level functions (mostly reexported from COMMON-LISP)
    #:PARSE-FILESPEC #:DEFINE-FILESPEC #:DEFAULT-OPEN-CLASS #:OPEN
    #:CLOSE #:READ-BYTE #:READ-CHAR #:READ-CHAR-NO-HANG #:UNREAD-CHAR

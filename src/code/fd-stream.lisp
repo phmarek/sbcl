@@ -54,39 +54,8 @@
 (defconstant +bytes-per-buffer+ (* 4 1024)
   "Default number of bytes per buffer.")
 
-(defun alloc-buffer (&optional (size +bytes-per-buffer+))
-  ;; Don't want to allocate & unwind before the finalizer is in place.
-  (without-interrupts
-    (let* ((sap (allocate-system-memory size))
-           (buffer (%make-buffer sap size)))
-      (when (zerop (sap-int sap))
-        (error "Could not allocate ~D bytes for buffer." size))
-      (finalize buffer (lambda ()
-                         (deallocate-system-memory sap size))
-                :dont-save t)
-      buffer)))
-
-
-(defun get-buffer (stream)
-  (let ((buffer-size (fd-stream-desired-buffer-size stream))
-        (cache (if buffer-size 
-                   *available-buffers*
-                   (fd-stream-buffer-list stream))))
-  (or (and  (atomic-pop cache))
-      (alloc-buffer :size (or buffer-size +bytes-per-buffer+)))))
-
-
-(declaim (inline reset-buffer))
-(defun reset-buffer (buffer)
-  (setf (buffer-head buffer) 0
-        (buffer-tail buffer) 0)
-  buffer)
-
-(defun release-buffer (stream buffer)
-  (reset-buffer buffer)
-  (if (fd-stream-desired-buffer-size stream)
-      (atomic-push buffer (fd-stream-buffer-list stream))
-      (atomic-push buffer *available-buffers*)))
+(defparameter *bytes-per-buffer* nil
+   "Overrides +BYTES-PER-BUFFER+ for newly created streams.")
 
 
 ;;;; the FD-STREAM structure
@@ -145,7 +114,7 @@
   ;; T if serve-event is allowed when this stream blocks
   (serve-events nil :type boolean)
 
-  ;; Only used for non-standard buffer sizes
+  ;; both only used for non-standard buffer sizes
   (desired-buffer-size nil :type (or null fixnum))
   (buffer-list nil :type list)
   ;; the input buffer
@@ -190,6 +159,40 @@
     (when (buffer-p buf)
       (release-buffer fd-stream buf)))
   (setf (fd-stream-output-queue fd-stream) nil))
+
+(defun alloc-buffer (&optional (size +bytes-per-buffer+))
+  ;; Don't want to allocate & unwind before the finalizer is in place.
+  (without-interrupts
+    (let* ((sap (allocate-system-memory size))
+           (buffer (%make-buffer sap size)))
+      (when (zerop (sap-int sap))
+        (error "Could not allocate ~D bytes for buffer." size))
+      (finalize buffer (lambda ()
+                         (deallocate-system-memory sap size))
+                :dont-save t)
+      buffer)))
+
+(defun get-buffer (stream)
+  (let ((buffer-size (fd-stream-desired-buffer-size stream)))
+    (or (if buffer-size
+            (and (fd-stream-buffer-list stream)
+                 (atomic-pop (fd-stream-buffer-list stream)))
+            (and *available-buffers*
+                 (atomic-pop *available-buffers*)))
+        (alloc-buffer (or buffer-size +bytes-per-buffer+)))))
+
+(declaim (inline reset-buffer))
+(defun reset-buffer (buffer)
+  (setf (buffer-head buffer) 0
+        (buffer-tail buffer) 0)
+  buffer)
+
+(defun release-buffer (stream buffer)
+  (reset-buffer buffer)
+  (if (fd-stream-desired-buffer-size stream)
+      (atomic-push buffer (fd-stream-buffer-list stream))
+      (atomic-push buffer *available-buffers*)))
+
 
 ;;;; FORM-TRACKING-STREAM
 
@@ -2282,7 +2285,9 @@
                           :delete-original delete-original
                           :pathname pathname
                           :buffering buffering
-                          :desired-buffer-size desired-buffer-size
+                          :desired-buffer-size (or desired-buffer-size
+                                                   *bytes-per-buffer*
+                                                   +bytes-per-buffer+)
                           :dual-channel-p dual-channel-p
                           :element-mode element-mode
                           :serve-events serve-events
@@ -2549,6 +2554,7 @@
                                          :dual-channel-p nil
                                          :serve-events nil
                                          :input-buffer-p t
+                                         :desired-buffer-size desired-buffer-size
                                          :auto-close t))
                         (:probe
                          (let ((stream
