@@ -1740,7 +1740,7 @@
                 ,@body)))
 (defmethod change-class ((instance standard-object) (new-class standard-class)
                          &rest initargs)
-  (unless (eq (class-of instance) new-class)
+  (identity ; unless (eq (class-of instance) new-class)
     (with-world-lock ()
       (check-new-class-not-metaobject new-class)
     (with-temporary-instance (temp)
