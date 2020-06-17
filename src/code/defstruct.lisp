@@ -2013,8 +2013,10 @@ or they must be declared locally notinline at each call site.~@:>"
         nconc (dx-let ((key (cons dd dsd)))
                 `(,@(unless (dsd-read-only dsd)
                      `((sb-c:xdefun (setf ,accessor-name) :accessor (value instance)
+                         (declare (sb-c::lambda-list (newval ,(dd-name dd))))
                          ,(slot-access-transform :setf '(instance value) key))))
                   (sb-c:xdefun ,accessor-name :accessor (instance)
+                    (declare (sb-c::lambda-list (,(dd-name dd))))
                     ,(slot-access-transform :read '(instance) key))))))
 
 ;;;; instances with ALTERNATE-METACLASS
