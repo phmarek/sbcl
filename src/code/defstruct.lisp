@@ -1957,15 +1957,16 @@ or they must be declared locally notinline at each call site.~@:>"
                  (dd-slots dd))))))))))
 
 (defun accessor-definitions (dd)
-  (loop for dsd in (dd-slots dd)
+  (loop with instance = (dd-name dd)
+        for dsd in (dd-slots dd)
         for accessor-name = (dsd-accessor-name dsd)
         unless (accessor-inherited-data accessor-name dd)
         nconc (dx-let ((key (cons dd dsd)))
                 `(,@(unless (dsd-read-only dsd)
-                     `((sb-c:xdefun (setf ,accessor-name) :accessor (value instance)
-                         ,(slot-access-transform :setf '(instance value) key))))
-                  (sb-c:xdefun ,accessor-name :accessor (instance)
-                    ,(slot-access-transform :read '(instance) key))))))
+                     `((sb-c:xdefun (setf ,accessor-name) :accessor (value ,instance)
+                         ,(slot-access-transform :setf `(,instance value) key))))
+                  (sb-c:xdefun ,accessor-name :accessor (,instance)
+                    ,(slot-access-transform :read `(,instance) key))))))
 
 ;;;; instances with ALTERNATE-METACLASS
 ;;;;
