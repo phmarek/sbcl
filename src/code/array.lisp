@@ -1244,7 +1244,8 @@ of specialized arrays is supported."
                            (initial-contents nil contents-p)
                            fill-pointer
                            displaced-to (displaced-index-offset 0 offset-p))
-  "Adjust ARRAY's dimensions to the given DIMENSIONS and stuff."
+  "Adjust ARRAY's dimensions to the given DIMENSIONS and stuff.
+  *Might* modify in-place or return a new array depending on circumstances."
   (when (invalid-array-p array)
     (invalid-array-error array))
   (binding*
