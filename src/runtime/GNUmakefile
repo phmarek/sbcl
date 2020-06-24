@@ -37,6 +37,9 @@ CFLAGS += -g -Wall -Wundef -Wsign-compare -Wpointer-arith -O3
 ASFLAGS += $(CFLAGS)
 CPPFLAGS += -I.
 
+# https://perf.wiki.kernel.org/index.php/Tutorial#Binary_identification_with_build-id
+LDFLAGS += -Wl,--build-id
+
 # Give make access to the target Lisp features.
 include genesis/Makefile.features
 
