@@ -93,6 +93,8 @@
                                          (purify t)
                                          (root-structures ())
                                          (environment-name "auxiliary")
+                                         #+linux
+                                         (usdt-probes nil)
                                          (compression nil)
                                          #+win32
                                          (application-type :console))
@@ -162,6 +164,12 @@ The following &KEY arguments are defined:
      The notable difference is that :GUI doesn't automatically create a console
      window. The default is :CONSOLE.
 
+  :USDT-PROBES
+     On Linux you can put ELF notes in the binary, telling perf(1) where
+     to find the symbols. If T, all symbols are documented; if a string,
+     only symbols in this package are.
+     Only useful if :EXECUTABLE is set.
+
 The save/load process changes the values of some global variables:
 
   *STANDARD-OUTPUT*, *DEBUG-IO*, etc.
@@ -192,6 +200,7 @@ This isn't because we like it this way, but just because there don't
 seem to be good quick fixes for either limitation and no one has been
 sufficiently motivated to do lengthy fixes."
   (declare (ignore environment-name))
+  (declare (ignore usdt-probes))
   #+gencgc
   (declare (ignore purify) (ignorable root-structures))
   ;; If the toplevel function is not defined, this will signal an
