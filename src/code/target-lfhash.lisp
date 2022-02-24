@@ -55,7 +55,7 @@
   ;; The upper bound is harmlessly wrong by a factor of 2 because
   ;; INFO-CELL-INDEX should be the max physical cell that can be addressed.
   ;; No problem - you'll run out of memory before hitting the edge anyway.
-  (capacity  0 :type (and (integer 3 *) info-cell-index)) ; immutable
+  (capacity  0 :type (and (integer 3) info-cell-index)) ; immutable
   ;; Make a new storage if count exceeds this
   (threshold 0 :type info-cell-index) ; immutable
   (next nil :type simple-vector) ; Pending INFO-STORAGE during rehash
