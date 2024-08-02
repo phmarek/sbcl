@@ -40,8 +40,9 @@
     (named-type
      (ecase (named-type-name type)
        ((* t) t)
+       ;; Needs to be before instance, to make subtypes work(?)
+       ((udef-inttype) (values (udef-inttype-p object)))
        ((instance) (%instancep object))
-       ((udef-inttype) (udef-inttype-p object))
        ((funcallable-instance) (funcallable-instance-p object))
        ((extended-sequence) (extended-sequence-p object))
        ((nil) nil)))

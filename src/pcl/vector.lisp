@@ -798,8 +798,11 @@
                                   (if call-next-method-p
                                       req-args
                                       lambda-list))))
+        ;;(sb-debug:print-backtrace)
         `(list*
           :function
+          (let ()
+            (declare (optimize (debug 3) (speed 1)))
           (let* ((fmf (,(if *method-name* 'named-lambda 'lambda)
                         ,@(when *method-name*
                                 ;; function name
@@ -809,7 +812,17 @@
                         ;; body of the function
                         (declare (ignorable .pv. .next-method-call.)
                                  (disable-package-locks pv-env-environment))
-                        ,@outer-decls
+                        ,@ (remove-if (lambda (pred)
+                                        #+(or)
+                                        (let ((*package* (find-package :keyword)))
+                                          (format *trace-output* ">>> ~s~%" pred))
+                                        (eq (caadr pred) 'sb-c::source-form)
+                                        (eq (caadr pred) 'sb-pcl::%parameter)
+                                        (eq (caadr pred) 'sb-pcl::%class)
+                                        (equalp pred '(cl:declare (cl:type sb-int:udef-inttype cl-user::x)))
+                                        nil
+                                        )
+                                      outer-decls)
                         (symbol-macrolet ((pv-env-environment default))
                           (fast-lexical-method-functions
                               (,bind-list .next-method-call. ,req-args ,rest-arg
@@ -820,6 +833,7 @@
             (setf (%funcallable-instance-fun mf)
                   (method-function-from-fast-function fmf ',(getf initargs 'plist)))
             mf)
+          )
           ',initargs)))))
 
 ;;; Use arrays and hash tables and the fngen stuff to make this much

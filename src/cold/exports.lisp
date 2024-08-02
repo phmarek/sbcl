@@ -2959,6 +2959,7 @@ structure representations")
            "SIMPLE-FUN-NAME-SLOT"
            "SIMPLE-FUN-ENTRY-SAP"
            "FUN-POINTER-LOWTAG"
+           "UDEF-INTTYPE-LOWTAG"
            "FUNCTION-LAYOUT"
            "SIMPLE-FUN-INFO-SLOT"
            "SIMPLE-FUN-SELF-SLOT"
@@ -3633,3 +3634,14 @@ package is deprecated in favour of SB-MOP.")
            "PROTO-FN-NAME"
            "PROTO-FN-PRETTY-ARGLIST"
            "TYPE-CHECK"))
+
+(defpackage "SB-UDEF-INTTYPE"
+  (:documentation "User-defined integer types")
+  (:use "CL" "SB-INT") ; "SB-EXT" "SB-SYS" "SB-KERNEL"
+  ;(:import-from "SB-INT"
+  ;              ;"UDEF-INTTYPE"
+  ;              "MAKE-UDEF-INTTYPE" "UDEF-INTTYPE-VALUE"
+  ;              "UDEF-INTTYPE-P")
+  (:export "REGISTER-UDEF-SUBTYPE-ID"
+           "UDEF-INTTYPE-TYPE-OF"
+           "DEF-UDEF-INTTYPE"))

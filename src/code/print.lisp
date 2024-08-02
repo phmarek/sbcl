@@ -599,8 +599,30 @@ variable: an unreadable object representing the error is printed instead.")
             (prin1 'funcallable-instance stream))))))
   (when (udef-inttype-p object)
     (return-from output-ugly-object
-      (print-unreadable-object (object stream :identity nil :type t)
-        (format stream "#x~x" (udef-inttype-value object)))))
+      (multiple-value-bind (type val) (udef-inttype-type-of object)
+        (cond
+          (type
+           ;print-unreadable-object (object stream :identity nil :type nil)
+           (write-string "#<" stream)
+           (write-string (symbol-name type) stream)
+           (write-string " #x" stream)
+           (write val
+                  :base 16
+                  :radix nil
+                  :stream stream)
+           (write-string ">" stream))
+          (t
+           (write-string "#<udef??? #x" stream)
+           (write (get-lisp-obj-address object)
+                  :base 16
+                  :radix nil
+                  :stream stream)
+           (write-string ">" stream)))
+        #+(or)
+        (format stream "#<~a #x~x#>"
+                (or type 'udef-inttype)
+                (or val object))
+        val)))
   (print-object object stream))
 
 ;;;; symbols

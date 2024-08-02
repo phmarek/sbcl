@@ -548,6 +548,7 @@
   (define listp list-pointer-lowtag)
   (define %instancep instance-pointer-lowtag)
   (define %other-pointer-p other-pointer-lowtag))
+(format *error-output* "DEF LOWTAG ~s~%" udef-inttype-lowtag)
 
 ;;; Function subtypes produce a flag result
 (macrolet ((define (name widetag)

@@ -939,6 +939,7 @@ between the ~A definition and the ~A definition"
 (defglobal **non-instance-classoid-types**
   '(symbol system-area-pointer weak-pointer code-component
     #-(or x86 x86-64 arm64 riscv) lra
+    ;;udef-inttype ; makes no difference
     fdefn random-class))
 
 (defun classoid-non-instance-p (classoid)
@@ -1124,10 +1125,15 @@ between the ~A definition and the ~A definition"
       :codes ,sb-vm::fixnum-lowtags
       :prototype-form 42)
      (udef-inttype
-      :codes (,sb-vm::udef-inttype-lowtag)
       :predicate udef-inttype-p
-      :prototype-form #+sb-xc ,(sb-kernel:%make-lisp-obj sb-vm::udef-inttype-lowtag)
-                      #-sb-xc :udef-inttype-prototype)
+      :codes (,sb-vm::udef-inttype-lowtag)
+      ;;:inherits (fixnum) ;; to get NUMERIC-TYPE to make DEFMETHOD type checking work?
+      ;; still named-type instance
+      ;:prototype-form #+sb-xc ,(sb-kernel:%make-lisp-obj sb-vm::udef-inttype-lowtag)
+      ;                #-sb-xc :udef-inttype-prototype
+      :prototype-form 0 ; gets filled in later
+      )
+
      (bignum
       :translation (and integer (not fixnum))
       :inherits (integer rational real number)

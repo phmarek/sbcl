@@ -483,6 +483,9 @@ Please check that all strings which were not recognizable to the compiler
            ;; Retain some internals to keep CLSQL working.
            (member symbol '(sb-loop::*loop-epilogue*
                             sb-loop::add-loop-path))))
+      (#.(find-package "SB-UDEF-INTTYPE")
+       t #+(or)
+       (eq accessibility :external))
       (#.(find-package "SB-LOCKLESS")
        (or (eq accessibility :external)
            (member symbol '(sb-lockless::+hash-nbits+)))) ; for a test
@@ -514,7 +517,7 @@ Please check that all strings which were not recognizable to the compiler
            (or (sb-kernel:symbol-%info symbol)
                (sb-kernel:%symbol-function symbol)
                (and (boundp symbol) (not (keywordp symbol))))))))
-   :verbose nil :print nil)
+   :verbose nil :print t)
   (unintern 'sb-impl::shake-packages 'sb-impl)
   (let ((sum-delta-ext 0)
         (sum-delta-int 0))
