@@ -546,6 +546,7 @@
   (define functionp fun-pointer-lowtag)
   (define listp list-pointer-lowtag)
   (define %instancep instance-pointer-lowtag)
+  (define udef-inttype-p udef-inttype-lowtag)
   (define %other-pointer-p other-pointer-lowtag))
 
 ;;; Function subtypes produce a flag result

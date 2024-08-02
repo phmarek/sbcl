@@ -1123,6 +1123,11 @@ between the ~A definition and the ~A definition"
       :inherits (integer rational real number)
       :codes ,sb-vm::fixnum-lowtags
       :prototype-form 42)
+     (udef-inttype
+      :codes (,sb-vm::udef-inttype-lowtag)
+      :predicate udef-inttype-p
+      :prototype-form #+sb-xc ,(sb-kernel:%make-lisp-obj sb-vm::udef-inttype-lowtag)
+                      #-sb-xc :udef-inttype-prototype)
      (bignum
       :translation (and integer (not fixnum))
       :inherits (integer rational real number)

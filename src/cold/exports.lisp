@@ -777,6 +777,8 @@ possibly temporarily, because it might be used internally.")
    "CONSTANT-DISPLACEMENT"
    "EXTENDED-FUNCTION-DESIGNATOR"
    "EXTENDED-FUNCTION-DESIGNATOR-P"
+   "UDEF-INTTYPE" "UDEF-INTTYPE-P" "UDEF-INTTYPE-LOWTAG"
+   "MAKE-UDEF-INTTYPE" "UDEF-INTTYPE-VALUE"
    ;; ..and type predicates
 
    "DOUBLE-FLOAT-P"

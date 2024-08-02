@@ -144,6 +144,8 @@
           (if (built-in-classoid-p type)
               (ecase name
                 (symbol (values (symbolp obj) t)) ; 1:1 correspondence with host
+                ;; Not used or available during cross-compilation
+                (udef-inttype (values nil t))
                 (function
                  (if (functionp obj)
                      (uncertain)
