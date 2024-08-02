@@ -50,7 +50,16 @@
 
 (define-type-vop single-float-p (single-float-widetag))
 
+;; Ineffective because they're lowtags!!
 (define-type-vop fixnump #.fixnum-lowtags)
+(defun udef-inttype-p (x)
+  (declare (optimize (speed 3) (debug 1)))
+  (or (eq x :udef-inttype-prototype)
+      ;; No user-define integer types during cross-compilation
+      #+sb-xc
+      (eql sb-int:udef-inttype-lowtag
+           (logand #xff
+                   (sb-kernel:get-lisp-obj-address x)))))
 
 (define-type-vop functionp (fun-pointer-lowtag))
 

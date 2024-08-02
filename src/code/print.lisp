@@ -597,6 +597,10 @@ variable: an unreadable object representing the error is printed instead.")
         (return-from output-ugly-object
           (print-unreadable-object (object stream :identity t)
             (prin1 'funcallable-instance stream))))))
+  (when (udef-inttype-p object)
+    (return-from output-ugly-object
+      (print-unreadable-object (object stream :identity nil :type t)
+        (format stream "#x~x" (udef-inttype-value object)))))
   (print-object object stream))
 
 ;;;; symbols

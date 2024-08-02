@@ -98,6 +98,7 @@
   (def-type-predicate-wrapper double-float-p)
   (def-type-predicate-wrapper fdefn-p)
   (def-type-predicate-wrapper fixnump)
+  (def-type-predicate-wrapper udef-inttype-p)
   (def-type-predicate-wrapper floatp)
   (def-type-predicate-wrapper functionp)
   ;; SIMPLE-FUN-P is needed for constant folding in early warm load,

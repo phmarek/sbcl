@@ -41,6 +41,7 @@
      (ecase (named-type-name type)
        ((* t) t)
        ((instance) (%instancep object))
+       ((udef-inttype) (udef-inttype-p object))
        ((funcallable-instance) (funcallable-instance-p object))
        ((extended-sequence) (extended-sequence-p object))
        ((nil) nil)))

@@ -52,6 +52,8 @@
   ;; 2005-09-09
   (frob instance *instance-type*)
   (frob funcallable-instance *funcallable-instance-type*)
+  ;; New after sbcl-2.4.7: User-defined integers, to be used in DEFMETHOD etc.
+  #+(or) (frob udef-inttype *instance-type*)
   ;; new in sbcl-1.0.3.3: necessary to act as a join point for the
   ;; extended sequence hierarchy.  (Might be removed later if we use
   ;; a dedicated FUNDAMENTAL-SEQUENCE class for this.)

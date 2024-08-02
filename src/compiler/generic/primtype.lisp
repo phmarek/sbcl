@@ -47,6 +47,10 @@
 (!def-primitive-type signed-byte-64 (signed-reg descriptor-reg)
   :type (signed-byte 64))
 
+#+(or 64-bit 64-bit-registers)
+(!def-primitive-type udef-inttype (unsigned-reg descriptor-reg)
+  :type (unsigned-byte #.(- 64 n-widetag-bits)))
+
 (define-load-time-global *fixnum-primitive-type* (primitive-type-or-lose 'fixnum))
 
 (/show0 "primtype.lisp 53")

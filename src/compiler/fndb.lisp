@@ -80,7 +80,7 @@
 (defknown (null symbolp atom consp listp numberp integerp rationalp floatp
                 complexp characterp stringp bit-vector-p vectorp
                 simple-vector-p simple-string-p simple-bit-vector-p arrayp
-                packagep functionp compiled-function-p not)
+                packagep functionp compiled-function-p not udef-inttype-p)
   (t) boolean (movable foldable flushable))
 
 (defknown (eq eql) (t t) boolean
