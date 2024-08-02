@@ -220,7 +220,9 @@
               (name (classoid-name classoid)))
          ;; FIXME: should the first test be (not (or (%instancep) (%funcallable-instance-p)))?
          ;; God forbid anyone makes anonymous classes of generic functions.
-         (cond ((not (%instancep object))
+         (cond ((udef-inttype-p object)
+                (udef-inttype-type-of object))
+               ((not (%instancep object))
                 name)
                ((eq name 'sb-alien-internals:alien-value)
                 `(alien ,(sb-alien-internals:unparse-alien-type
