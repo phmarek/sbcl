@@ -161,6 +161,7 @@
      (let ((data (or (get obj 'column-struct-data)
                      (error "~s is not a column-structure type." obj))))
        (column-struct-resize (symbol-value data) new-size)))
+    ;;
     ((typep obj 'udef-c-s-only)
      ;; unsafe resize, other threads might change elements
      ;; TODO: add restart to reset or keep them if more indizes are actually used
@@ -171,20 +172,28 @@
                              ;;:initial-element ??
                              :element-type (array-element-type old)))))
      (column-struct-size obj))
+    ;;
     ((typep obj 'udef-c-s-upper)
      (let* ((batches-wanted (ceiling new-size (c-s-batch-size obj)))
             (old (slot-value obj 'lower)))
        ;; TODO: also make smaller?
-       (loop for size-now = (array-dimension old 0)
+       ;; Don't use ARRAY-DIMENSION, the array is ADJUSTABLE
+       (loop for size-now = (length old)
              while (< size-now batches-wanted)
+             ;do (format *trace-output* "resize from ~d~%" size-now)
+             ;do (describe old *trace-output*)
              do (vector-push-extend
                   (funcall (csu-make-lower obj)
                            :master-var (csu-master-var obj)
                            :batch-index size-now)
                   old)))
      (column-struct-size obj))
+    ;;
     (t
-     (error "Bad type for ~s" obj))))
+     (error "Bad type for ~s" obj)))
+  ;(format *trace-output* "resized to ~d~&" (column-struct-size obj))
+  (column-struct-size obj)
+  )
 
 
 (defmacro c-s-value% (2-level? data-var slot-name idx &optional (before 'identity) after)

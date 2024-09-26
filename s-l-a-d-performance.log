@@ -1,0 +1,27 @@
+DEFSTRUCT:
+
+real	0m12,309s
+user	0m11,561s
+sys	0m0,744s
+-rwxr-xr-x 1 marek marek 361632280 26. Sep 14:50 /tmp/slad-comparison
+DEF-COLUMN-STRUCT:
+Final size: 11208610
+
+real	0m3,355s
+user	0m2,639s
+sys	0m0,720s
+-rwxr-xr-x 1 marek marek 310760816 26. Sep 14:50 /tmp/slad-comparison
+DEF-COLUMN-STRUCT with initial-size:
+Final size: 10001891
+
+real	0m3,438s
+user	0m2,786s
+sys	0m0,655s
+-rwxr-xr-x 1 marek marek 281752288 26. Sep 14:50 /tmp/slad-comparison
+DEF-COLUMN-STRUCT with initial-size and batched:
+Final size: 8000000
+
+real	0m4,421s
+user	0m4,037s
+sys	0m0,384s
+-rwxr-xr-x 1 marek marek 234388080 26. Sep 14:50 /tmp/slad-comparison
