@@ -2959,6 +2959,7 @@ structure representations")
            "SIMPLE-FUN-NAME-SLOT"
            "SIMPLE-FUN-ENTRY-SAP"
            "FUN-POINTER-LOWTAG"
+           "UDEF-INTTYPE-LOWTAG"
            "FUNCTION-LAYOUT"
            "SIMPLE-FUN-INFO-SLOT"
            "SIMPLE-FUN-SELF-SLOT"
