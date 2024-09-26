@@ -99,7 +99,7 @@
     ((typep obj 'udef-c-s-lower)
      (setf (csl-fill-pointer obj) 0))
     ((typep obj 'udef-c-s-upper)
-     (map 'nil #'column-struct-reset 
+     (map 'nil #'column-struct-reset
           (slot-value obj 'lower)))
     (t
      (error "Bad type for ~s" obj))))
@@ -112,8 +112,8 @@
                      (error "~s is not a column-structure type." obj))))
        (column-struct-size (symbol-value data))))
     ((typep obj 'udef-c-s-only)
-     (array-dimension (slot-value obj 
-                                  (first 
+     (array-dimension (slot-value obj
+                                  (first
                                     (c-s-slot-names obj)))
                       0))
     ((typep obj 'udef-c-s-upper)
@@ -228,7 +228,7 @@
   - Garbage collection is not available (only reset of all data)
   TODO - Is not a class, so PRINT-OBJECT etc. can't be specialized yet
   "
-  (destructuring-bind (struct-name &rest options) (alexandria:ensure-list name-and-options)
+  (destructuring-bind (struct-name &rest options) (sb-int:ensure-list name-and-options)
     (flet ((option (name default)
              (or (second (find name options :key #'first)) default)))
       (sb-int:with-unique-names (old-size udef-maker udef-reader idx where)
@@ -244,7 +244,7 @@
                (with-batch-macro (option :with-batch-allocation-sym nil))
                (ll-constructor (gensym (format nil "~a-~a" :make-ll struct-name)))
                (var-constructor (gensym (format nil "~a-~a" :make-data-var struct-name)))
-               (constructor-name (option :constructor 
+               (constructor-name (option :constructor
                                          (intern (format nil "~a~a" :make- struct-name)
                                                  (symbol-package struct-name))))
                ;;
@@ -261,7 +261,10 @@
                (fns ()))
           ;; TODO: pull ,init out into a LET per slot?
           (dolist (slot slots)
-            (destructuring-bind (name &optional init &key (type t)) (alexandria:ensure-list slot)
+            (destructuring-bind (name &optional init &key (type t))
+                (if (consp slot)
+                    slot
+                    (list slot))
               (let ((accessor (intern (format nil "~a-~a" struct-name name)
                                       (symbol-package struct-name))))
                 (push name slot-names)
@@ -340,8 +343,8 @@
                                               (+ ,old-size
                                                  ,(or batch-size 50))))))
                ;; Make setup order same as slot order
-               ,@ (nreverse 
-                    (mapcar 
+               ,@ (nreverse
+                    (mapcar
                       (lambda (name)
                         `(c-s-value% ,2-level? ,data-var ',name ,idx setf (,name)))
                       slot-names))
@@ -353,9 +356,10 @@
                (let ((,idx (get-new-id-range ,data-var)))
                  (,base-constructor ,data-var ,idx ,@ (reverse slot-names))))
              ;;
-             #+(or)(when with-batch-macro
-                     (assert (> 100 batch-size))
-                     `(defmacro ,with-batch-macro ((fn-name) &body body)
+             ,(when with-batch-macro
+               (assert (> 100 batch-size))
+               #+(or)
+               `(defmacro ,with-batch-macro ((fn-name) &body body)
                         ,(format nil "FN-NAME is a local constructor taking the same arguments as ~a,
                                  with a locally reserved range of IDs so that threads operate
                                  on different cache lines." constructor-name)
