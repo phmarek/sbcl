@@ -335,3 +335,14 @@ ID-WORD2: 0
 (type-of *data*)
 (type-of -1)
 (type-of #\3)
+
+(defparameter *gs* (gensym))
+
+(defstruct #. *gs*
+  (slot-22))
+(do-all-symbols (s)
+  (when (alexandria:ends-with-subseq "SLOT-22" (symbol-name s))
+    (format t "~s~%" s)))
+
+(mapcar #'sb-mop:slot-definition-readers
+(sb-mop:class-slots (find-class *gs*)))

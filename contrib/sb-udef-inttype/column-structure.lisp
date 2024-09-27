@@ -33,6 +33,7 @@
            #:column-struct-last-index
            #:column-struct-reset
            #:column-struct-resize))
+(defpackage :sb-column-struct-internal-accessors)
 (in-package :sb-column-struct)
 
 ;; Sizing heuristics for parallel allocation in threads
@@ -46,7 +47,8 @@
              (:conc-name c-s-))
   (udef         nil :type symbol     :read-only t)
   (master-var   nil :type symbol     :read-only t)
-  (slot-names   nil :type list       :read-only t)
+  (e-slot-names nil :type list       :read-only t)
+  (i-slot-names nil :type list       :read-only t)
   (fill-pointer   0 :type sb-vm:word)
   (batch-size   nil :type (or null
                               (integer 1 1000000000))
@@ -110,7 +112,7 @@
     ((typep obj 'udef-c-s-only)
      (array-dimension (slot-value obj
                                   (first
-                                    (c-s-slot-names obj)))
+                                    (cso-i-slot-names obj)))
                       0))
     ((typep obj 'udef-c-s-upper)
      (* (length (slot-value obj 'lower))
@@ -163,7 +165,7 @@
     ((typep obj 'udef-c-s-only)
      ;; unsafe resize, other threads might change elements
      ;; TODO: add restart to reset or keep them if more indizes are actually used
-     (dolist (slot (c-s-slot-names obj))
+     (dolist (slot (cso-i-slot-names obj))
        (let ((old (slot-value obj slot)))
          (setf (slot-value obj slot)
                (adjust-array old new-size
@@ -201,19 +203,17 @@
   )
 
 
-(defun c-s-value% (2-level? data-var slot-name idx &optional (before 'identity) after)
+(defun c-s-value% (2-level? data-var accessor idx &optional (before 'identity) after)
   (if 2-level?
       (sb-int:with-unique-names (batch i lower)
         `(multiple-value-bind (,batch ,i) (floor ,idx (c-s-batch-size ,data-var))
            (let ((,lower (slot-value ,data-var 'lower)))
              (unless (< ,batch (array-dimension ,lower 0))
                (error "Data ~s out of bounds" ,idx))
-             (,before (aref (slot-value (aref ,lower ,batch)
-                                        ',slot-name)
+             (,before (aref (,accessor (aref ,lower ,batch))
                             ,i)
                       ,@ after))))
-      `(,before (aref (slot-value ,data-var
-                                  ',slot-name)
+      `(,before (aref (,accessor ,data-var)
                       ,idx)
                 ,@ after)))
 
@@ -268,74 +268,89 @@
                (base-constructor (gensym (format nil "*~a-CONSTRUCTOR*" struct-name)))
                ;;
                ;;
-               (slot-names ())
+               (i-slot-names ())
+               (e-slot-names ())
                (my-slots ())
                (constructor-arg-list ())
-               (accessor-names ())
+               (e-accessor-names ())
                (fns ()))
           (when (zerop (length slots))
             (error "Need at least one slot in ~s" struct-name))
           ;; TODO: pull ,init out into a LET per slot?
           (dolist (slot slots)
-            (destructuring-bind (name &optional init &key (type t))
+            (destructuring-bind (ext-name &optional init &key (type t))
                 (if (consp slot)
                     slot
                     (list slot))
-              (let ((accessor (intern (format nil "~a-~a" struct-name name)
-                                      (symbol-package struct-name))))
-                (push name slot-names)
-                (push `(,name (make-array (list ,(or batch-size initial-size))
-                                                    :initial-element ,init
-                                                    :element-type ',type)
-                              :type (simple-array ,type (,(or batch-size '*))))
+              (let* ((e-accessor (intern (format nil "~a-~a" struct-name ext-name)
+                                         (symbol-package struct-name)))
+                     ;; To avoid collisions, we generate own internal slot names
+                     ;; must not by GENSYMs, as the structure name gets prepended
+                     (i-name (intern (format nil "SLOT-~d" (length i-slot-names))
+                                     :sb-column-struct)))
+                (push i-name i-slot-names)
+                (push i-acc i-accessors)
+                (push ext-name e-slot-names)
+                (push `(,i-name 
+                         (make-array (list ,(or batch-size initial-size))
+                                     :initial-element ,init
+                                     :element-type ',type)
+                         :type (simple-array ,type (,(or batch-size '*))))
                       my-slots)
-                (push `(,name ,init) constructor-arg-list)
-                (push accessor accessor-names)
+                (push `(,ext-name ,init) constructor-arg-list)
+                (push e-accessor e-accessor-names)
                 ;;
-                (push `(defun ,accessor (id)
+                (push `(defun ,e-accessor (id)
                          (declare (optimize (speed 3) (safety 1) (debug 1))
                                   (type ,struct-name id))
                          (let ((idx (,udef-reader id)))
-                           ,(c-s-value% 2-level? data-var name 'idx)))
+                           ,(c-s-value% 2-level? data-var i-acc 'idx)))
                       fns)
-                (push `(defun (setf ,accessor) (new-val id)
+                (push `(defun (setf ,e-accessor) (new-val id)
                          (declare (optimize (speed 3) (safety 1) (debug 1))
                                   (type ,struct-name id))
                          (let ((idx (,udef-reader id)))
-                           ,(c-s-value% 2-level? data-var name 'idx
+                           ,(c-s-value% 2-level? data-var i-acc 'idx
                                        'setf '(new-val))))
                       fns))))
-          ;; only once, and before everything else
-          ;; TODO: a (sb-ext:defglobal) in the macro code below?
           (let ((base-defaults `((master-var ',data-var)
                                  (batch-size ,batch-size)
-                                 (slot-names ',(reverse slot-names))
+                                 (i-slot-names ',(reverse i-slot-names))
+                                 (e-slot-names ',(reverse e-slot-names))
                                  (udef ',struct-name))))
+            ;; only once, and before everything else
             (cond
               (2-level?
                (eval `(defstruct (,col-struct
-                                 (:constructor ,ll-constructor)
-                                 (:include udef-c-s-lower
-                                  (master-var ',data-var)))
-                      ,@ my-slots))
+                                   (:constructor ,ll-constructor)
+                                   (:conc-name nil)
+                                   (:include udef-c-s-lower
+                                    (master-var ',data-var)))
+                        ,@ my-slots))
                (eval `(defstruct (,upper-struct
                                  (:constructor ,var-constructor)
+                                   (:conc-name nil)
                                  (:include udef-c-s-upper
                                   (make-lower #',ll-constructor)
                                   ,@ base-defaults))
-                      (lower (make-array 1 :element-type ',col-struct
-                                         :adjustable t
-                                         :initial-contents (list (,ll-constructor))
-                                         :fill-pointer 0)))))
+                        (lower (make-array 1 :element-type ',col-struct
+                                           :adjustable t
+                                           :initial-contents (list (,ll-constructor))
+                                           :fill-pointer 0)))))
               (t ;; single-level only
                (setf upper-struct col-struct)
                (eval `(defstruct (,col-struct
-                                 (:constructor ,var-constructor)
-                                 (:include udef-c-s-only
-                                  ,@ base-defaults))
-                      ,@ my-slots)))))
+                                   (:constructor ,var-constructor)
+                                   (:conc-name nil)
+                                   (:include udef-c-s-only
+                                    ,@ base-defaults))
+                        ,@ my-slots))))
+          ;; Accessors are GENSYMed as well, so let's find them
+          (let* ((i-accessors (mapcar #'sb-pcl::slot-definition-defstruct-accessor-symbol
+                                      (sb-mop:class-slots (find-class col-struct))))
           (sb-ext:with-current-source-form (options slots)
             `(progn
+               ;; TODO: a (sb-ext:defglobal) instead? Need to find order
                (declaim (type (or null ,upper-struct) ,data-var))
                (defparameter ,data-var nil)
              ;;
@@ -350,7 +365,7 @@
                    ',data-var)
              ;;
              (declaim (inline ,base-constructor))
-             (defun ,base-constructor (,where ,idx ,@ (reverse slot-names))
+             (defun ,base-constructor (,where ,idx ,@ (reverse e-slot-names))
                ;; TODO: provide restart for reallocation
                (let ((,old-size (column-struct-size ,where)))
                  (when (>= ,idx ,old-size)
@@ -361,16 +376,17 @@
                ;; Make setup order same as slot order
                ,@ (nreverse
                     (mapcar
-                      (lambda (name)
-                        (c-s-value% 2-level? data-var name idx 'setf (list name)))
-                      slot-names))
+                      (lambda (i-acc ext)
+                        (c-s-value% 2-level? data-var i-acc idx 'setf (list ext)))
+                      i-accessors
+                      e-slot-names))
                ;; Return (doubly-)tagged UDEF-INTTYPE
                (,udef-maker ,idx))
              ;; This arglist must be in correct order, though
              (defun ,constructor-name (&key ,@ (nreverse constructor-arg-list))
                ;; Value before incrementing
                (let ((,idx (get-new-id-range ,data-var)))
-                 (,base-constructor ,data-var ,idx ,@ (reverse slot-names))))
+                 (,base-constructor ,data-var ,idx ,@ (reverse e-slot-names))))
              ;;
              ,(when with-batch-macro
                (assert (> 100 batch-size))
@@ -402,13 +418,13 @@
           #+(or)
           (defmethod sb-c::describe-object :after ((obj ,struct-name) stream)
             ,@(loop for acc in (reverse accessor-names)
-                    for slot in (reverse slot-names)
+                    for slot in (reverse i-slot-names)
                     collect `(format stream "~&  ~A = ~A~%" ',slot (,acc obj))))
           ;;
           (setf ,data-var (,var-constructor))
           (column-struct-reset ,data-var)
           (column-struct-resize ,data-var ,initial-size)
-          ',struct-name)))))))
+          ',struct-name))))))))))
 
 ;; TODO: don't EVAL, but return one form using EVAL-WHEN?
 ;;       should get rid of (OR NULL ...) in DECLAIM
