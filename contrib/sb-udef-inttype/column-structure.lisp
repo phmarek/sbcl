@@ -273,6 +273,8 @@
                (constructor-arg-list ())
                (accessor-names ())
                (fns ()))
+          (when (zerop (length slots))
+            (error "Need at least one slot in ~s" struct-name))
           ;; TODO: pull ,init out into a LET per slot?
           (dolist (slot slots)
             (destructuring-bind (name &optional init &key (type t))
