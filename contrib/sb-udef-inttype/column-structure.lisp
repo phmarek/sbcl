@@ -201,7 +201,7 @@
   )
 
 
-(defmacro c-s-value% (2-level? data-var slot-name idx &optional (before 'identity) after)
+(defun c-s-value% (2-level? data-var slot-name idx &optional (before 'identity) after)
   (if 2-level?
       (sb-int:with-unique-names (batch i lower)
         `(multiple-value-bind (,batch ,i) (floor ,idx (c-s-batch-size ,data-var))
@@ -209,11 +209,11 @@
              (unless (< ,batch (array-dimension ,lower 0))
                (error "Data ~s out of bounds" ,idx))
              (,before (aref (slot-value (aref ,lower ,batch)
-                                        ,slot-name)
+                                        ',slot-name)
                             ,i)
                       ,@ after))))
       `(,before (aref (slot-value ,data-var
-                                  ,slot-name)
+                                  ',slot-name)
                       ,idx)
                 ,@ after)))
 
@@ -294,14 +294,14 @@
                          (declare (optimize (speed 3) (safety 1) (debug 1))
                                   (type ,struct-name id))
                          (let ((idx (,udef-reader id)))
-                           (c-s-value% ,2-level? ,data-var ',name idx)))
+                           ,(c-s-value% 2-level? data-var name 'idx)))
                       fns)
                 (push `(defun (setf ,accessor) (new-val id)
                          (declare (optimize (speed 3) (safety 1) (debug 1))
                                   (type ,struct-name id))
                          (let ((idx (,udef-reader id)))
-                           (c-s-value% ,2-level? ,data-var ',name idx
-                                       setf (new-val))))
+                           ,(c-s-value% 2-level? data-var name 'idx
+                                       'setf '(new-val))))
                       fns))))
           ;; only once, and before everything else
           ;; TODO: a (sb-ext:defglobal) in the macro code below?
@@ -360,7 +360,7 @@
                ,@ (nreverse
                     (mapcar
                       (lambda (name)
-                        `(c-s-value% ,2-level? ,data-var ',name ,idx setf (,name)))
+                        (c-s-value% 2-level? data-var name idx 'setf (list name)))
                       slot-names))
                ;; Return (doubly-)tagged UDEF-INTTYPE
                (,udef-maker ,idx))
@@ -408,6 +408,6 @@
           (column-struct-resize ,data-var ,initial-size)
           ',struct-name)))))))
 
-;; TODO: convert such a type into (unsigned-byte X) for slots and vectors
-;; TODO: box/unbox into specialized arrays and slots
-;; TODO: freelist
+;; TODO: don't EVAL, but return one form using EVAL-WHEN?
+;; TODO: box/unbox into (unsigned-byte X) specialized arrays and slots
+;; TODO: optionally a freelist
