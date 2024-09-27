@@ -57,7 +57,7 @@
 (loop with instance = *data*
       for i from *max* downto 0
       unless (eq *def* 'defstruct)
-      do (multiple-value-bind (type raw) 
+      do (multiple-value-bind (type raw)
              (sb-impl::udef-inttype-type-of instance)
            (assert (eq type 'my-integers))
            (assert (= raw i)))

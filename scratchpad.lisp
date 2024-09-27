@@ -346,3 +346,9 @@ ID-WORD2: 0
 
 (mapcar #'sb-mop:slot-definition-readers
 (sb-mop:class-slots (find-class *gs*)))
+
+(defstruct bar0
+  (foo 0 :type integer))
+
+(defstruct (bar1 (:include bar0))
+  (foo t :type symbol))
