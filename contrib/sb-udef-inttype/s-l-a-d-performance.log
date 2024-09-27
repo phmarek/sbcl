@@ -1,0 +1,13 @@
+DEFSTRUCT:
+  Elapsed:   0:11.89   User: 11.56   System: 0.32
+  Size:    362353312
+DEF-COLUMN-STRUCT:
+  Elapsed:   0:03.85   User: 3.43   System: 0.42
+  Size:    311547400
+DEF-COLUMN-STRUCT with initial-size:
+  Elapsed:   0:03.63   User: 3.34   System: 0.29
+  Size:    282538872
+DEF-COLUMN-STRUCT with initial-size and batched:
+  Elapsed:   0:05.39   User: 5.12   System: 0.26
+  Size:    331509200
+

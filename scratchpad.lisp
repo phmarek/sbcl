@@ -331,3 +331,7 @@ ID-WORD2: 0
 (type-of (udef-inttype-example::make-my-idx #x151))
 
 (sb-fasl::write-constants-h *standard-output*)
+
+(type-of *data*)
+(type-of -1)
+(type-of #\3)

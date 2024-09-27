@@ -47,6 +47,7 @@
   (udef         nil :type symbol     :read-only t)
   (master-var   nil :type symbol     :read-only t)
   (slot-names   nil :type list       :read-only t)
+  (fill-pointer   0 :type sb-vm:word)
   (batch-size   nil :type (or null
                               (integer 1 1000000000))
                 :read-only t))
@@ -63,14 +64,15 @@
   (lock (sb-thread:make-mutex :name "c-s-upper-lock")
         :type sb-thread:mutex
         :read-only t)
+  (make-lower nil :type function)
   ;; lower vector slot added dynamically because of dynamic type
-  (make-lower nil :type function))
+  )
 
 (defstruct (udef-c-s-only
              (:include udef-c-s-metadata)
              (:conc-name cso-))
   ;; Other slots added dynamically
-  (fill-pointer  0 :type sb-vm:word))
+  )
 
 (defun get-upper-last-batch (obj)
   (let* ((lower (slot-value obj 'lower))
@@ -79,13 +81,7 @@
 
 (declaim (inline get-new-id-range))
 (defun get-new-id-range (obj)
-  (etypecase obj
-    (udef-c-s-only
-      (sb-ext:atomic-incf (cso-fill-pointer obj)))
-    (udef-c-s-upper
-      (let ((batch (get-upper-last-batch obj)))
-        (sb-ext:atomic-incf (csl-fill-pointer batch))))))
-
+  (sb-ext:atomic-incf (c-s-fill-pointer obj)))
 
 (defun column-struct-reset (obj)
   "Soft-resets OBJ, ie. sets the last used index to 0."
@@ -131,8 +127,10 @@
      (let ((data (or (get obj 'column-struct-data)
                      (error "~s is not a column-structure type." obj))))
        (column-struct-last-index (symbol-value data))))
-    ((typep obj 'udef-c-s-only)
-     (cso-fill-pointer obj))
+    ((or (typep obj 'udef-c-s-only)
+         (typep obj 'udef-c-s-upper))
+     (c-s-fill-pointer obj))
+     #+(or)
     ((typep obj 'udef-c-s-upper)
      (let* ((last-batch (get-upper-last-batch obj)))
        (+ (* (csl-batch-index last-batch)
@@ -180,13 +178,20 @@
        ;; Don't use ARRAY-DIMENSION, the array is ADJUSTABLE
        (loop for size-now = (length old)
              while (< size-now batches-wanted)
-             ;do (format *trace-output* "resize from ~d~%" size-now)
              ;do (describe old *trace-output*)
-             do (vector-push-extend
-                  (funcall (csu-make-lower obj)
-                           :master-var (csu-master-var obj)
-                           :batch-index size-now)
-                  old)))
+             for new-lower-index = (vector-push-extend
+                                     (funcall (csu-make-lower obj)
+                                              :master-var (csu-master-var obj)
+                                              :batch-index size-now)
+                                     old)
+             ;;do (format *trace-output* "resize from ~d, new lower ~d, ~s~%"
+             ;;           size-now new-lower-index
+             ;;           (map 'list #'sb-kernel:get-lisp-obj-address old)
+             ;;           #+(or)
+             ;;           (map 'list (lambda (l)
+             ;;                        (length (slot-value l (first (csu-slot-names obj)))))
+             ;;                old))
+             ))
      (column-struct-size obj))
     ;;
     (t
@@ -390,6 +395,13 @@
                               ,@ `, body)))))
           ;;
           ,@ fns
+          ;;
+          ;; BROKEN: There is no class named X.
+          #+(or)
+          (defmethod sb-c::describe-object :after ((obj ,struct-name) stream)
+            ,@(loop for acc in (reverse accessor-names)
+                    for slot in (reverse slot-names)
+                    collect `(format stream "~&  ~A = ~A~%" ',slot (,acc obj))))
           ;;
           (setf ,data-var (,var-constructor))
           (column-struct-reset ,data-var)
