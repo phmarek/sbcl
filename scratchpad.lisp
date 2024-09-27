@@ -337,18 +337,31 @@ ID-WORD2: 0
 (type-of #\3)
 
 (defparameter *gs* (gensym))
+(defparameter *sn* (gensym "SLOT-51"))
 
-(defstruct #. *gs*
-  (slot-22))
+(defstruct #. `(,*gs* (:conc-name nil))
+  (#. *sn*))
 (do-all-symbols (s)
-  (when (alexandria:ends-with-subseq "SLOT-22" (symbol-name s))
+  (when (search "SLOT-51" (symbol-name s))
     (format t "~s~%" s)))
 
-(mapcar #'sb-mop:slot-definition-readers
-(sb-mop:class-slots (find-class *gs*)))
+(mapcar #'sb-pcl::slot-definition-defstruct-accessor-symbol
+        (sb-mop:class-slots (find-class *gs*)))
 
-(defstruct bar0
-  (foo 0 :type integer))
 
-(defstruct (bar1 (:include bar0))
-  (foo t :type symbol))
+(mapcar #'sb-pcl::slot-definition-defstruct-accessor-symbol
+        (sb-mop:class-slots
+            (class-of col-struct-example::my-foo-data)))
+
+
+(defstruct (foo-vec (:type vector)
+                    (:initial-offset 5)
+                    :named)
+  (foo1 0 :type fixnum))
+
+(defparameter *foo-vec* (make-foo-vec))
+
+;; vector element can't by typed as different types are required,
+;; so no ATOMIC-INCF possible
+(setf (aref *foo-vec* 6) 3)
+;; store a vector of fill-pointers in the upper!

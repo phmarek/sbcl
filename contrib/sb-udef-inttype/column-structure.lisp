@@ -231,6 +231,57 @@
                 ,@ after)))
 
 
+(defun handle-c-s-slots (struct-name 2-level? 
+                                     batch-size data-var initial-size
+                                     udef-reader lower-acc
+                                    slots)
+  ;; This ensures that we get #:SLOT-1, #:SLOT-2, for each column-structure,
+  ;; so doesn't pollute the keyword package for the initargs as much
+  (let ((*gensym-counter* 1))
+    ;; both &optional and &key
+    (declare (sb-ext:muffle-conditions style-warning))
+    (loop for slot% in slots
+          for (ext-name init type) = (destructuring-bind
+                                         (n &optional i &key (type t))
+                                         (sb-int:ensure-list slot%)
+                                       (list n i type))
+          ;; TODO: :CONC-NAME behaviour
+          ;; This is actually incompatible -- we should intern into *PACKAGE*??!
+          for e-accessor = (intern (format nil "~a-~a" struct-name ext-name)
+                                   (symbol-package struct-name))
+          ;; To avoid collisions, we generate own internal slot names
+          for i-name = (gensym (symbol-name ext-name))
+          collect i-name into i-slot-names
+          collect ext-name into e-slot-names
+          collect `(,i-name
+                     (make-array (list ,(or batch-size initial-size))
+                                 :initial-element ,init
+                                 :element-type ',type)
+                     :type (simple-array ,type (,(or batch-size '*))))
+          into actual-slots
+          collect `(,ext-name ,init) into constructor-arg-list
+          collect e-accessor into e-accessor-names
+          ;;
+          collect `(declaim (ftype (function (,struct-name) T) ,e-accessor))
+          into code
+          collect `(defun ,e-accessor (id)
+                     (declare (optimize (speed 3) (safety 1) (debug 1))
+                              (type ,struct-name id))
+                     (let ((idx (,udef-reader id)))
+                       ,(c-s-value% 2-level? data-var i-name 'idx lower-acc)))
+          into code
+          collect `(defun (setf ,e-accessor) (new-val id)
+                     (declare (optimize (speed 3) (safety 1) (debug 1))
+                              (type ,struct-name id))
+                     (let ((idx (,udef-reader id)))
+                       ,(c-s-value% 2-level? data-var i-name 'idx lower-acc
+                                    'setf '(new-val)))
+                     new-val)
+          into code
+          finally (return (values i-slot-names e-slot-names
+                                  e-accessor-names actual-slots
+                                  constructor-arg-list code)))))
+
 (defmacro def-column-struct (name-and-options &rest slots)
   "Like DEFSTRUCT, but creates an array per slot,
   and the \"identity\" of an instance is actually the index
@@ -280,164 +331,130 @@
                (data-var (option :data-var (gensym (format nil "~a-~a" :data struct-name))))
                (base-constructor (gensym (format nil "*~a-CONSTRUCTOR*" struct-name)))
                ;;
-               (lower-acc (gensym "LOWER"))
-               ;;
-               (i-slot-names ())
-               (e-slot-names ())
-               (my-slots ())
-               (constructor-arg-list ())
-               (e-accessor-names ())
-               (fns ()))
+               (lower-acc (gensym "LOWER")))
           (when (zerop (length slots))
             (error "Need at least one slot in ~s" struct-name))
-          ;; TODO: pull ,init out into a LET per slot?
-          (dolist (slot slots)
-            ;; both &optional and &key
-            (declare (sb-ext:muffle-conditions style-warning))
-            (destructuring-bind (ext-name &optional init &key (type t))
-                (if (consp slot)
-                    slot
-                    (list slot))
-              ;; TODO: :CONC-NAME behaviour
-              (let* ((e-accessor (intern (format nil "~a-~a" struct-name ext-name)
-                                         (symbol-package struct-name)))
-                     ;; To avoid collisions, we generate own internal slot names
-                     (i-name (gensym (symbol-name ext-name))))
-                (push i-name i-slot-names)
-                (push ext-name e-slot-names)
-                (push `(,i-name
-                         (make-array (list ,(or batch-size initial-size))
-                                     :initial-element ,init
-                                     :element-type ',type)
-                         :type (simple-array ,type (,(or batch-size '*))))
-                      my-slots)
-                (push `(,ext-name ,init) constructor-arg-list)
-                (push e-accessor e-accessor-names)
-                ;;
-                (push `(defun ,e-accessor (id)
-                         (declare (optimize (speed 3) (safety 1) (debug 1))
-                                  (type ,struct-name id))
-                         (let ((idx (,udef-reader id)))
-                           ,(c-s-value% 2-level? data-var i-name 'idx lower-acc)))
-                      fns)
-                (push `(defun (setf ,e-accessor) (new-val id)
-                         (declare (optimize (speed 3) (safety 1) (debug 1))
-                                  (type ,struct-name id))
-                         (let ((idx (,udef-reader id)))
-                           ,(c-s-value% 2-level? data-var i-name 'idx lower-acc
-                                        'setf '(new-val))))
-                      fns))))
-          (let ((base-defaults `((master-var ',data-var)
-                                 (batch-size ,batch-size)
-                                 (i-slot-names ',(reverse i-slot-names))
-                                 (e-slot-names ',(reverse e-slot-names))
-                                 (udef ',struct-name))))
-            ;; only once, and before everything else
-            (cond
-              (2-level?
-               (eval `(defstruct (,col-struct
-                                   (:constructor ,ll-constructor)
-                                   (:conc-name nil)
-                                   (:include udef-c-s-lower
-                                    (master-var ',data-var)))
-                        ,@ my-slots))
-               (eval `(defstruct (,upper-struct
-                                   (:constructor ,var-constructor)
-                                   (:conc-name nil)
-                                   (:include udef-c-s-upper
-                                    (lower-acc #',lower-acc)
-                                    (make-lower #',ll-constructor)
-                                    ,@ base-defaults))
-                        (,lower-acc (make-array 1
-                                                :element-type ',col-struct
-                                                :adjustable t
-                                                :initial-contents (list (,ll-constructor))
-                                                :lfill-pointer 0)))))
-              (t ;; single-level only
-               (setf upper-struct col-struct)
-               (eval `(defstruct (,col-struct
-                                   (:constructor ,var-constructor)
-                                   (:conc-name nil)
-                                   (:include udef-c-s-only
-                                    ,@ base-defaults))
-                        ,@ my-slots)))))
-          (sb-ext:with-current-source-form (options slots)
-            `(progn
-               ;; TODO: a (sb-ext:defglobal) instead? Need to find order
-               (declaim (type (or null ,upper-struct) ,data-var))
-               (defparameter ,data-var nil)
-               ;;
-               (deftype ,struct-name () 'sb-int:udef-inttype)
-               (sb-impl::def-udef-inttype ,struct-name
-                 :id ,udef-inttype-id
-                 ;; TODO: derive max-bits
-                 :constructor ,udef-maker
-                 :reader ,udef-reader)
-               ;;
-               (setf (get ',struct-name 'column-struct-data)
-                     ',data-var)
-               ;;
-               (declaim (inline ,base-constructor))
-               (defun ,base-constructor (,where ,idx ,@ (reverse e-slot-names))
-                 ;; TODO: provide restart for reallocation
-                 (let ((,old-size (column-struct-size ,where)))
-                   (when (>= ,idx ,old-size)
-                     (column-struct-resize ,where
-                                           (max (floor (* 1.41 ,old-size))
-                                                (+ ,old-size
-                                                   ,(or batch-size 50))))))
-                 ;; Make setup order same as slot order
-                 ,@ (nreverse
-                      (mapcar
-                        (lambda (int ext)
-                          (c-s-value% 2-level? data-var int idx lower-acc 'setf (list ext)))
-                        i-slot-names
-                        e-slot-names))
-                 ;; Return (doubly-)tagged UDEF-INTTYPE
-                 (,udef-maker ,idx))
-               ;; This arglist must be in correct order, though
-               (defun ,constructor-name (&key ,@ (nreverse constructor-arg-list))
-                 ;; Value before incrementing
-                 (let ((,idx (get-new-id-range ,data-var)))
-                   (,base-constructor ,data-var ,idx ,@ (reverse e-slot-names))))
-               ;;
-               ,(when with-batch-macro
-                  (assert (> 100 batch-size))
-                  #+(or)
-                  `(defmacro ,with-batch-macro ((fn-name) &body body)
-                     ,(format nil "FN-NAME is a local constructor taking the same arguments as ~a,
-                              with a locally reserved range of IDs so that threads operate
-                              on different cache lines." constructor-name)
-                     ;; TODO: another vector, one level above to avoid reallocating big vectors
-                     ;; and that function allocates a new lower-level vector
-                     (let ((,local-alloc-max -1)
-                           (,local-alloc-idx 0))
-                       (flet ((alloc ()
-                                (multiple-value-bind (new max) (get-new-id-range ,data-var ,batch-size)
-                                  (setf ,local-alloc-max max
-                                        ,local-alloc-idx new)))
-                              (fn-name ()
-                                (when (>= ,local-alloc-idx ,local-alloc-max)
-                                  (alloc))
-                                (prog1
-                                    ,local-alloc-idx
-                                  (incf ,local-alloc-idx))))
-                         (locally
-                           ,@ `, body)))))
-                  ;;
-                  ,@ fns
-                  ;;
-                  ;; BROKEN: There is no class named X.
-                  #+(or)
-                  (defmethod sb-c::describe-object :after ((obj ,struct-name) stream)
-                    ,@(loop for acc in (reverse accessor-names)
-                            for slot in (reverse i-slot-names)
-                            collect `(format stream "~&  ~A = ~A~%" ',slot (,acc obj))))
-                  ;;
-                  (setf ,data-var (,var-constructor))
-                  (column-struct-reset ,data-var)
-                  (column-struct-resize ,data-var ,initial-size)
-                  ',struct-name)))))))
+          (multiple-value-bind (i-slot-names e-slot-names
+                                             e-accessor-names actual-slots
+                                             constructor-arg-list code)
+              (handle-c-s-slots struct-name 2-level? 
+                                batch-size data-var initial-size
+                                udef-reader lower-acc
+                                slots)
+            (let ((base-defaults `((master-var ',data-var)
+                                   (batch-size ,batch-size)
+                                   (i-slot-names ',i-slot-names)
+                                   (e-slot-names ',e-slot-names)
+                                   (udef ',struct-name))))
+              (unless 2-level?
+                (setf upper-struct col-struct))
+              (identity ;sb-ext:with-current-source-form (options slots)
+                `(progn
+                   ,(if 2-level?
+                        `(progn
+                           (defstruct (,col-struct
+                                        (:constructor ,ll-constructor
+                                         (&optional ,@ i-slot-names))
+                                        (:conc-name nil)
+                                        (:include udef-c-s-lower
+                                         (master-var ',data-var)))
+                             ,@ actual-slots)
+                           (defstruct (,upper-struct
+                                        (:constructor ,var-constructor)
+                                        (:conc-name nil)
+                                        (:include udef-c-s-upper
+                                         (lower-acc #',lower-acc)
+                                         (make-lower #',ll-constructor)
+                                         ,@ base-defaults))
+                             (,lower-acc (make-array 1
+                                                     :element-type ',col-struct
+                                                     :adjustable t
+                                                     :initial-contents (list (,ll-constructor))
+                                                     :lfill-pointer 0))))
+                        ;; single-level only
+                        `(defstruct (,col-struct
+                                      (:constructor ,var-constructor
+                                       (&optional ,@ i-slot-names))
+                                      (:conc-name nil)
+                                      (:include udef-c-s-only
+                                       ,@ base-defaults))
+                           ,@ actual-slots))
+                   ;;
+                   ;;
+                   (deftype ,struct-name () 'sb-int:udef-inttype)
+                   (sb-impl::def-udef-inttype ,struct-name
+                     :id ,udef-inttype-id
+                     ;; TODO: derive max-bits
+                     :constructor ,udef-maker
+                     :reader ,udef-reader)
+                   ;;
+                   (setf (get ',struct-name 'column-struct-data)
+                         ',data-var)
+                   ;;
+                   (declaim (inline ,base-constructor))
+                   (defun ,base-constructor (,where ,idx ,@ e-slot-names)
+                     ;; TODO: provide restart for reallocation
+                     (let ((,old-size (column-struct-size ,where)))
+                       (when (>= ,idx ,old-size)
+                         (column-struct-resize ,where
+                                               (max (floor (* 1.41 ,old-size))
+                                                    (+ ,old-size
+                                                       ,(or batch-size 50))))))
+                     ,@ (mapcar
+                            (lambda (int ext)
+                              (c-s-value% 2-level? data-var int idx lower-acc 'setf (list ext)))
+                            i-slot-names
+                            e-slot-names)
+                     ;; Return (doubly-)tagged UDEF-INTTYPE
+                     (,udef-maker ,idx))
+                   ;; This arglist must be in correct order, though
+                   (defun ,constructor-name (&key ,@ constructor-arg-list)
+                     ;; Value before incrementing
+                     (let ((,idx (get-new-id-range ,data-var)))
+                       (,base-constructor ,data-var ,idx ,@ e-slot-names)))
+                   ;;
+                   ,(when with-batch-macro
+                      (assert (> 100 batch-size))
+                      #+(or)
+                      `(defmacro ,with-batch-macro ((fn-name) &body body)
+                         ,(format nil "FN-NAME is a local constructor taking the same arguments as ~a,
+                                  with a locally reserved range of IDs so that threads operate
+                                  on different cache lines." constructor-name)
+                         ;; TODO: another vector, one level above to avoid reallocating big vectors
+                         ;; and that function allocates a new lower-level vector
+                         (let ((,local-alloc-max -1)
+                               (,local-alloc-idx 0))
+                           (flet ((alloc ()
+                                    (multiple-value-bind (new max) (get-new-id-range ,data-var ,batch-size)
+                                      (setf ,local-alloc-max max
+                                            ,local-alloc-idx new)))
+                                  (fn-name ()
+                                    (when (>= ,local-alloc-idx ,local-alloc-max)
+                                      (alloc))
+                                    (prog1
+                                        ,local-alloc-idx
+                                      (incf ,local-alloc-idx))))
+                             (locally
+                               ,@ `, body)))))
+                      ;;
+                      (declaim (type ,(if 2-level? 
+                                          upper-struct
+                                          col-struct)
+                                     ,data-var))
+                      (sb-ext:defglobal ,data-var (,var-constructor))
+                      ;;
+                      ,@ code
+                      ;;
+                      ;; BROKEN: There is no class named X.
+                      #+(or)
+                      (defmethod sb-c::describe-object :after ((obj ,struct-name) stream)
+                        ,@(loop for acc in e-accessor-names
+                                for slot in i-slot-names
+                                collect `(format stream "~&  ~A = ~A~%" ',slot (,acc obj))))
+                      ;;
+                      (column-struct-reset ,data-var)
+                      (column-struct-resize ,data-var ,initial-size)
+                      ',struct-name)))))))))
 
 ;; TODO: don't EVAL, but return one form using EVAL-WHEN?
 ;;       should get rid of (OR NULL ...) in DECLAIM
