@@ -411,5 +411,12 @@
           ',struct-name)))))))
 
 ;; TODO: don't EVAL, but return one form using EVAL-WHEN?
+;;       should get rid of (OR NULL ...) in DECLAIM
+;;       Also the WARNING:
+;;          The new TYPE proclamation for COL-STRUCT-EXAMPLE::MY-FOO-DATA
+;;               (OR NULL #:COL-STRUCT-FOO337)
+;;          does not match the old TYPE proclamation
+;;               (OR NULL #:COL-STRUCT-FOO231)
+;;
 ;; TODO: box/unbox into (unsigned-byte X) specialized arrays and slots
 ;; TODO: optionally a freelist
