@@ -13,17 +13,76 @@
 ;; In the latter case allocating more data means just adding to the first vector,
 ;; so that should be multithreading-safe.
 ;;
+;; Simple case:
+;;     ┌global-var─────┐
+;;     │ udef          │
+;;     │ mfill-pointer │
+;;     │ master-var    │
+;;     │ ...           │
+;;     │ #:slot0       ├─────────────>┌vect0┐
+;;     │ #:slot1       ├────>┌vect1┐  │v-0-0│
+;;     └───────────────┘     │v-0-1│  │v-1-0│
+;;                           │v-1-1│  │v-2-0│
+;;                           │v-2-1│  │     │
+;;                           │     │  └─────┘
+;;                           └─────┘
 ;;
-;; The biggest advantage is that with typed (UNSIGNED-BYTE x) slots
+;; 2-level-case:
+;;
+;;     ┌───────────────┐<──────┐
+;;     │ master-var    │       │     ┌───────────────┐  ┌vect0┐
+;;     │ udef          │       └─────┤ master-var    │  │v-0-0│
+;;     │ mfill-pointer │             │ batch-index   │  │v-1-0│
+;;     │ ...           │             │ lfill-pointer │  │v-2-0│
+;;     │ #:lower       ├─>┌batches┐  │ #:slot-0      ├─>└─────┘
+;;     └───────────────┘  │ 0     ├─>│ #:slot-1      ├─>┌vect1┐
+;;                        │ 1     ├┐ │               │  │v-0-1│
+;;                        │       ││ └───────────────┘  │v-1-1│
+;;                        │       │└──>└─────────────┘  │v-2-1│
+;;                        └───────┘                     └─────┘ 
+;;
+;;
+;; The structures being used are defined freshly,
+;; so that the slot and vector types are as narrow as possible.
+;; This way memory usage is reduced (eg with (UNSIGNED-BYTE 16)).
+;;
+;;
+;; The biggest advantage of that scheme is that with specialized slots
 ;; the GC load and memory usage is reduced, as vectors with such types
 ;; are very quickly handled.
 ;;
-;; The advantage over just allocating big (UNSIGNED-BYTE 8) buffers and defining
-;; accessor functions over integer indizes is that this solution is runtime-type-safe,
-;; as at any point it is clear which data type hides behind some column-struct-index.
+;; Also, one advantage using the user-defined integer types
+;; over just allocating big (UNSIGNED-BYTE 8) buffers and
+;; defining accessor functions over integer indices
+;; is that this solution is runtime-type-safe --
+;; as at any point the compiler knows which data type hides
+;; behind some element index.
 ;;
-;; Keywords: no-header-structures, column-oriented-data, gc-friendly, runtime-type-safety
 ;;
+;; The use-case this is being implemented for is a database -
+;; data gets imported into the heap, so that SAVE-LISP-AND-DIE
+;; gives an instant-on service that (when saved uncompressed)
+;; pages data in on demand -- even if only 2GB RAM are available
+;; for a 20GB heap dump.
+;;
+;;
+;; The savings in GC time are quite nice:
+;;   # make comparison dumpfile=/tmp/my-binary
+;;   DEFSTRUCT:
+;;     Elapsed:   0:08.88   User: 8.66   System: 0.21
+;;     Size:    298501728   Created:    8000000
+;;   DEF-COLUMN-STRUCT:
+;;     Elapsed:   0:02.55   User: 2.26   System: 0.29
+;;     Size:    245401368   Used items: 8000001 of 8448152
+;;   DEF-COLUMN-STRUCT with large initial-size:
+;;     Elapsed:   0:02.48   User: 2.23   System: 0.25
+;;     Size:    237534648   Used items: 8000001 of 8120000
+;;   DEF-COLUMN-STRUCT with large initial-size and batched:
+;;     Elapsed:   0:03.16   User: 2.99   System: 0.17
+;;     Size:    235207408   Used items: 8000001 of 8000008
+;;
+;;
+;; Keywords: headerless-structures, column-oriented-data, gc-friendly, runtime-type-safety
 
 (defpackage :sb-column-struct
   (:use :common-lisp ;:sb-udef-inttype
@@ -49,15 +108,15 @@
   (master-var   nil :type symbol     :read-only t)
   (e-slot-names nil :type list       :read-only t)
   (i-slot-names nil :type list       :read-only t)
-  (fill-pointer   0 :type sb-vm:word)
+  (mfill-pointer  0 :type sb-vm:word)
   (batch-size   nil :type (or null
                               (integer 1 1000000000))
                 :read-only t))
 
 (defstruct (udef-c-s-lower
              (:conc-name csl-))
-  (master-var   nil :type symbol     :read-only t)
-  (batch-index    0 :type fixnum)
+  (master-var    nil :type symbol     :read-only t)
+  (batch-index     0 :type fixnum)
   (lfill-pointer   0 :type sb-vm:word))
 
 (defstruct (udef-c-s-upper
@@ -91,7 +150,9 @@
 (defun get-new-id-range (obj)
   (cond
     ((typep obj 'udef-c-s-only)
-     (sb-ext:atomic-incf (c-s-fill-pointer obj)))
+     (sb-ext:atomic-incf (c-s-mfill-pointer obj)))
+    ((typep obj 'udef-c-s-upper)
+     (sb-ext:atomic-incf (c-s-mfill-pointer obj)))
     ((typep obj 'udef-c-s-lower)
      (sb-ext:atomic-incf (csl-lfill-pointer obj)))
     (t
@@ -105,7 +166,7 @@
                      (error "~s is not a column-structure type." obj))))
        (column-struct-reset (symbol-value data))))
     ((typep obj 'udef-c-s-only)
-     (setf (c-s-fill-pointer obj) 0))
+     (setf (c-s-mfill-pointer obj) 0))
     ((typep obj 'udef-c-s-lower)
      (setf (csl-lfill-pointer obj) 0))
     ((typep obj 'udef-c-s-upper)
@@ -127,7 +188,7 @@
                                     (cso-i-slot-names obj)))
                       0))
     ((typep obj 'udef-c-s-upper)
-     (* (length (slot-value obj 'lower))
+     (* (length (funcall (csu-lower-acc obj) obj))
         (csu-batch-size obj)))
     (t
      (error "Bad type for ~s" obj))))
@@ -142,15 +203,15 @@
                      (error "~s is not a column-structure type." obj))))
        (column-struct-last-index (symbol-value data))))
     ((typep obj 'udef-c-s-only)
-     (c-s-fill-pointer obj))
+     (c-s-mfill-pointer obj))
     ((typep obj 'udef-c-s-upper)
-     (c-s-fill-pointer obj))
+     (c-s-mfill-pointer obj))
     #+(or)
-    ((typep obj 'udef-c-s-upper)
+    ((typep obj 'udef-c-s-lower)
      (let* ((last-batch (get-upper-last-batch obj)))
        (+ (* (csl-batch-index last-batch)
              (csu-batch-size obj))
-          (csl-fill-pointer last-batch))))
+          (csl-mfill-pointer last-batch))))
     (t
      (error "Bad type for ~s" obj))))
 
@@ -183,37 +244,29 @@
          (setf (slot-value obj slot)
                (adjust-array old new-size
                              ;;:initial-element ??
-                             :element-type (array-element-type old)))))
-     (column-struct-size obj))
+                             :element-type (array-element-type old))))))
     ;;
     ((typep obj 'udef-c-s-upper)
      (let* ((batches-wanted (ceiling new-size (c-s-batch-size obj)))
             (old (funcall (csu-lower-acc obj) obj)))
        ;; TODO: also make smaller?
        ;; Don't use ARRAY-DIMENSION, the array is ADJUSTABLE
-       (loop for size-now = (length old)
-             while (< size-now batches-wanted)
-             ;do (describe old *trace-output*)
-             for new-lower-index = (vector-push-extend
-                                     (funcall (csu-make-lower obj)
-                                              :master-var (csu-master-var obj)
-                                              :batch-index size-now)
-                                     old)
-             ;;do (format *trace-output* "resize from ~d, new lower ~d, ~s~%"
-             ;;           size-now new-lower-index
-             ;;           (map 'list #'sb-kernel:get-lisp-obj-address old)
-             ;;           #+(or)
-             ;;           (map 'list (lambda (l)
-             ;;                        (length (slot-value l (first (csu-slot-names obj)))))
-             ;;                old))
-             ))
-     (column-struct-size obj))
+       (sb-thread:with-mutex ((csu-lock obj))
+         (loop for size-now = (length old)
+               while (< size-now batches-wanted)
+               for new-lower-index = (vector-push-extend
+                                       (funcall (csu-make-lower obj)
+                                                (csu-master-var obj)
+                                                size-now)
+                                       old)
+
+               ))))
     ;;
     (t
      (error "Bad type for ~s" obj)))
-  ;(format *trace-output* "resized to ~d~&" (column-struct-size obj))
-  (column-struct-size obj)
-  )
+  #+(or)
+  (format *trace-output* "resized to ~d~&" (column-struct-size obj))
+  (column-struct-size obj))
 
 
 (defun c-s-value% (2-level? data-var accessor idx lower-acc &optional (before 'identity) after)
@@ -231,7 +284,7 @@
                 ,@ after)))
 
 
-(defun handle-c-s-slots (struct-name 2-level? 
+(defun handle-c-s-slots (struct-name 2-level?
                                      batch-size data-var initial-size
                                      udef-reader lower-acc
                                     slots)
@@ -262,14 +315,17 @@
           collect `(,ext-name ,init) into constructor-arg-list
           collect e-accessor into e-accessor-names
           ;;
-          collect `(declaim (ftype (function (,struct-name) T) ,e-accessor))
-          into code
+          ;; TODO: inlines?
+          collect `(declare (ftype (function (,struct-name) ,type) ,e-accessor))
+          into decl
           collect `(defun ,e-accessor (id)
                      (declare (optimize (speed 3) (safety 1) (debug 1))
                               (type ,struct-name id))
                      (let ((idx (,udef-reader id)))
                        ,(c-s-value% 2-level? data-var i-name 'idx lower-acc)))
           into code
+          collect `(declare (ftype (function (,type ,struct-name) ,type) ,e-accessor))
+          into decl
           collect `(defun (setf ,e-accessor) (new-val id)
                      (declare (optimize (speed 3) (safety 1) (debug 1))
                               (type ,struct-name id))
@@ -280,7 +336,7 @@
           into code
           finally (return (values i-slot-names e-slot-names
                                   e-accessor-names actual-slots
-                                  constructor-arg-list code)))))
+                                  constructor-arg-list code decl)))))
 
 (defmacro def-column-struct (name-and-options &rest slots)
   "Like DEFSTRUCT, but creates an array per slot,
@@ -327,7 +383,7 @@
                                                  (symbol-package struct-name))))
                ;;
                (col-struct (gensym (format nil "~a-~a" :col-struct struct-name)))
-               (upper-struct (gensym (format nil "~a-~a" :col-struct-0 struct-name)))
+               (upper-struct (gensym (format nil "~a-~a" :upper-col-s struct-name)))
                (data-var (option :data-var (gensym (format nil "~a-~a" :data struct-name))))
                (base-constructor (gensym (format nil "*~a-CONSTRUCTOR*" struct-name)))
                ;;
@@ -336,8 +392,8 @@
             (error "Need at least one slot in ~s" struct-name))
           (multiple-value-bind (i-slot-names e-slot-names
                                              e-accessor-names actual-slots
-                                             constructor-arg-list code)
-              (handle-c-s-slots struct-name 2-level? 
+                                             constructor-arg-list code decl)
+              (handle-c-s-slots struct-name 2-level?
                                 batch-size data-var initial-size
                                 udef-reader lower-acc
                                 slots)
@@ -354,7 +410,8 @@
                         `(progn
                            (defstruct (,col-struct
                                         (:constructor ,ll-constructor
-                                         (&optional ,@ i-slot-names))
+                                         (master-var batch-index ; &optional ,@ i-slot-names
+                                                     ))
                                         (:conc-name nil)
                                         (:include udef-c-s-lower
                                          (master-var ',data-var)))
@@ -366,11 +423,13 @@
                                          (lower-acc #',lower-acc)
                                          (make-lower #',ll-constructor)
                                          ,@ base-defaults))
-                             (,lower-acc (make-array 1
-                                                     :element-type ',col-struct
-                                                     :adjustable t
-                                                     :initial-contents (list (,ll-constructor))
-                                                     :lfill-pointer 0))))
+                             (,lower-acc
+                               (make-array 1
+                                           :element-type ',col-struct
+                                           :adjustable t
+                                           :fill-pointer 1
+                                           :initial-contents
+                                           (list (,ll-constructor ',data-var 0))))))
                         ;; single-level only
                         `(defstruct (,col-struct
                                       (:constructor ,var-constructor
@@ -391,13 +450,19 @@
                    (setf (get ',struct-name 'column-struct-data)
                          ',data-var)
                    ;;
+                   (declaim (type ,(if 2-level?
+                                       upper-struct
+                                       col-struct)
+                                  ,data-var))
+                   (sb-ext:defglobal ,data-var (,var-constructor))                   ;;
+                   ;;
                    (declaim (inline ,base-constructor))
                    (defun ,base-constructor (,where ,idx ,@ e-slot-names)
                      ;; TODO: provide restart for reallocation
                      (let ((,old-size (column-struct-size ,where)))
                        (when (>= ,idx ,old-size)
                          (column-struct-resize ,where
-                                               (max (floor (* 1.41 ,old-size))
+                                               (max (round (* (sqrt 2) ,old-size))
                                                     (+ ,old-size
                                                        ,(or batch-size 50))))))
                      ,@ (mapcar
@@ -436,16 +501,14 @@
                                       (incf ,local-alloc-idx))))
                              (locally
                                ,@ `, body)))))
+
                       ;;
-                      (declaim (type ,(if 2-level? 
-                                          upper-struct
-                                          col-struct)
-                                     ,data-var))
-                      (sb-ext:defglobal ,data-var (,var-constructor))
-                      ;;
+                      (locally
+                        ,@ decl)
                       ,@ code
                       ;;
                       ;; BROKEN: There is no class named X.
+                      ',e-accessor-names ; avoid unused warning
                       #+(or)
                       (defmethod sb-c::describe-object :after ((obj ,struct-name) stream)
                         ,@(loop for acc in e-accessor-names
@@ -466,3 +529,4 @@
 ;;
 ;; TODO: box/unbox into (unsigned-byte X) specialized arrays and slots
 ;; TODO: optionally a freelist
+;; TODO: optimizing, especially the tags -- check all 16bit at once

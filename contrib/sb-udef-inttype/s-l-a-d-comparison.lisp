@@ -9,19 +9,24 @@
                              'defstruct
                              'sb-column-struct:def-column-struct))
      (defparameter *name* (cond
+                            ((string= what "1")
+                             'my-integers)
+                             ;; Sized up a few times, reaches *max* more or less exactly.
+                            ((string= what "2")
+                             '(my-integers (:initial-size 16500)
+                                           (:data-var var)))
                             ((string= what "3")
-                             ;; A size that, sized up a few times, reaches 10M.
-                              '(my-integers (:initial-size 3568000)))
+                              '(my-integers (:initial-size 2030000)
+                                            (:data-var var)))
                             ((string= what "4")
                               '(my-integers (:initial-size 3000000)
-                                            (:batched 1000000)))
-                            (t ; 1 & 2
-                              'my-integers))))
+                                            (:batched 1000001)
+                                            (:data-var var))))))
 
 #+(or)
 (setf *name* '(my-integers (:initial-size 30)
                            (:batched 10)
-                           (:data-var mymy)))
+                           (:data-var var)))
 
 (#. *def*  #. *name*
   (prev nil :type t)
@@ -38,7 +43,7 @@
           (sb-column-struct:column-struct-size 'my-integers)))
 
 
-(defparameter *max* 20000000)
+(defparameter *max* 8000000)
 
 
 (defparameter *data* (loop for i from 0 to *max*
@@ -54,31 +59,37 @@
   (describe *data*))
 
 ;; check content
-(loop with instance = *data*
-      for i from *max* downto 0
-      unless (eq *def* 'defstruct)
-      do (multiple-value-bind (type raw)
-             (sb-impl::udef-inttype-type-of instance)
-           (assert (eq type 'my-integers))
-           (assert (= raw i)))
-      ;;
-      do (assert (= (my-integers-v1 instance)
-                    i))
-      do (assert (= (my-integers-v2 instance)
-                    (mod i 37)))
-      do (setf instance (my-integers-prev instance))
-      ;if (zerop (mod i 100000))
-      ;do (format t "   okay for ~d~%" i)
-      finally (assert (null instance)))
+(defun check ()
+  (loop with instance = *data*
+        for i from *max* downto 0
+        unless (eq *def* 'defstruct)
+        do (multiple-value-bind (type raw)
+               (sb-impl::udef-inttype-type-of instance)
+             (assert (eq type 'my-integers))
+             (assert (= raw i)))
+        ;;
+        do (assert (= (my-integers-v1 instance)
+                      i))
+        do (assert (= (my-integers-v2 instance)
+                      (mod i 37)))
+        do (setf instance (my-integers-prev instance))
+        ;if (zerop (mod i 100000))
+        ;do (format t "   okay for ~d~%" i)
+        finally (assert (null instance))))
 
 
-#+(or)
-(unless (eq *def* 'defstruct)
-  (format t "Final size: ~d of ~d~%"
-          (sb-column-struct:column-struct-last-index 'my-integers)
-          (sb-column-struct:column-struct-size 'my-integers)))
+(defun sizes ()
+  (if (eq *def* 'defstruct)
+    (format t "   Created:    ~d~%" (my-integers-v1 *data*))
+    (format t "   Used items: ~d of ~d~%"
+            (sb-column-struct:column-struct-last-index 'my-integers)
+            (sb-column-struct:column-struct-size 'my-integers))))
+
+(check)
 
 (let ((file (third sb-ext:*posix-argv*)))
-  (when (string/= "-" file)
-    (save-lisp-and-die file :executable t)))
+  (unless (member file '(nil "" "-") :test #'equal)
+    (save-lisp-and-die file
+                       :executable t
+                       :toplevel #'sizes)))
 
