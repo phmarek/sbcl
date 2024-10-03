@@ -266,3 +266,15 @@ version 1[.0.0...] or greater."
   (declare (type (or null string) string))
   (push (list string name doc-type) sb-pcl::*!docstrings*)
   string)
+
+(declaim (inline udef-inttype-value
+                 make-udef-inttype))
+
+(defun udef-inttype-value (x)
+  (ash (sb-kernel:get-lisp-obj-address x)
+       (- sb-vm:n-widetag-bits)))
+
+(defun make-udef-inttype (x)
+  (declare (type (unsigned-byte 56) x))
+  (sb-kernel:%make-lisp-obj (logior (ash x 8)
+                                    sb-int:udef-inttype-lowtag)))

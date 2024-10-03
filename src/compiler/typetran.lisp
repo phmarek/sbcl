@@ -310,6 +310,7 @@
   (define-type-predicate consp cons)
   (define-type-predicate floatp float)
   (define-type-predicate functionp function)
+  (define-type-predicate udef-inttype-p udef-inttype)
   (define-type-predicate integerp integer)
   (define-type-predicate keywordp keyword)
   (define-type-predicate listp list)
