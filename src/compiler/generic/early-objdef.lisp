@@ -56,7 +56,7 @@
     pad0-lowtag
     instance-pointer-lowtag
     pad1-lowtag
-    other-immediate-1-lowtag
+    udef-inttype-lowtag
     pad2-lowtag
     list-pointer-lowtag
     odd-fixnum-lowtag

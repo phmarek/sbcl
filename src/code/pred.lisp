@@ -98,6 +98,7 @@
   (def-type-predicate-wrapper double-float-p)
   (def-type-predicate-wrapper fdefn-p)
   (def-type-predicate-wrapper fixnump)
+  (def-type-predicate-wrapper udef-inttype-p)
   (def-type-predicate-wrapper floatp)
   (def-type-predicate-wrapper functionp)
   ;; SIMPLE-FUN-P is needed for constant folding in early warm load,
@@ -219,7 +220,9 @@
               (name (classoid-name classoid)))
          ;; FIXME: should the first test be (not (or (%instancep) (%funcallable-instance-p)))?
          ;; God forbid anyone makes anonymous classes of generic functions.
-         (cond ((not (%instancep object))
+         (cond ((udef-inttype-p object)
+                (udef-inttype-type-of object)) ;; TODO move to classoid?
+               ((not (%instancep object))
                 name)
                ((eq name 'sb-alien-internals:alien-value)
                 `(alien ,(sb-alien-internals:unparse-alien-type

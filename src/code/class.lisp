@@ -1136,6 +1136,11 @@ between the ~A definition and the ~A definition"
       :inherits (integer rational real number)
       :codes ,sb-vm::fixnum-lowtags
       :prototype-form 42)
+     (udef-inttype
+      :predicate udef-inttype-p
+      :codes (,sb-vm::udef-inttype-lowtag)
+      :prototype-form 0 ; gets filled in later
+      )
      (bignum
       :translation (and integer (not fixnum))
       :inherits (integer rational real number)
