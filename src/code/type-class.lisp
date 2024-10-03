@@ -326,7 +326,7 @@
   (defvar *type-class-list*
     ;; type-class and ctype instance types in that class
     ;; The instance types MUST be list in descending order of DEPTHOID.
-    ;; See CTYPE->HASHSET-NAME for the rationale for this constraint.
+    ;; See CTYPE->HASHSET-NAME for the rationale for this constraint. << doesn't exist any more??
     '((named         named-type)
       (classoid      classoid)
       (values        values-type)
