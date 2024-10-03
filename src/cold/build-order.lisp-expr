@@ -255,6 +255,8 @@
  ("src/pcl/pre-warm")
  ("src/code/pathname" :not-host)
  ("src/code/target-sxhash" :not-host) ; needs most-fooative-foo-float constants
+#-sb-xc
+  ("src/code/target-udef-immediate" :not-host)
 
  ("src/code/debug-info" :c-headers)
 
@@ -731,4 +733,6 @@
   "src/code/repack-xref"
   #+cheneygc "src/code/purify"
   "src/code/module"
-  "src/code/save"))
+  "src/code/save")
+
+  )

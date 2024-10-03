@@ -40,6 +40,10 @@
     (named-type
      (ecase (named-type-name type)
        ((* t) t)
+       ;; cold compilation already does type derivations,
+       ;; but sb-xc:*features* (from src/cold/shebang.lisp) isn't active?
+       #- #.(cl:find :sb-xc sb-xc:*features*)
+       ((udef-inttype) (values (udef-inttype-p object)))
        ((instance) (%instancep object))
        ((funcallable-instance) (funcallable-instance-p object))
        ((extended-sequence) (extended-sequence-p object))

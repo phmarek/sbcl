@@ -778,6 +778,7 @@ possibly temporarily, because it might be used internally.")
    "CONSTANT-DISPLACEMENT"
    "EXTENDED-FUNCTION-DESIGNATOR"
    "EXTENDED-FUNCTION-DESIGNATOR-P"
+
    ;; ..and type predicates
 
    "DOUBLE-FLOAT-P"
@@ -968,6 +969,12 @@ possibly temporarily, because it might be used internally.")
    ;; an experimental thing
    "STDIO-FILE"
    "MAKE-STDIO-FILE"
+
+   ;; for SB-UDEF-IMMEDIATE
+
+   "UDEF-INTTYPE" "UDEF-INTTYPE-P"
+   "MAKE-UDEF-INTTYPE" "UDEF-INTTYPE-VALUE"
+   "UDEF-INTTYPE-TYPE-OF"
 
    ;; for SB-COVER
 
@@ -2994,6 +3001,7 @@ structure representations")
            "SIMPLE-FUN-NAME-SLOT"
            "SIMPLE-FUN-ENTRY-SAP"
            "FUN-POINTER-LOWTAG"
+           "UDEF-INTTYPE-WIDETAG"
            "FUNCTION-LAYOUT"
            "SIMPLE-FUN-INFO-SLOT"
            "SIMPLE-FUN-SELF-SLOT"

@@ -32,6 +32,7 @@
                 (precompile-ctors))))
   (precompile-random-code-segments pcl))
 
+#+(or)
 (push '("SB-PCL" *built-in-classes*) *!removable-symbols*)
 
 (defun !system-class-p (x) (typep x 'sb-pcl::system-class))
