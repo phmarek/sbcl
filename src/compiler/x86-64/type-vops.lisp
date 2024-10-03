@@ -656,6 +656,7 @@
                 (:generator 1 (inst cmp :byte value ,widetag)))))
   (define single-float-p single-float-widetag)
   (define characterp character-widetag)
+  (define udef-inttype-p udef-inttype-widetag)
   (define unbound-marker-p unbound-marker-widetag))
 
 ;;; FUNCTIONP, LISTP, %INSTANCEP, %OTHER-POINTER-P produce a flag result

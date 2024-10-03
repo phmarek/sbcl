@@ -75,6 +75,8 @@
   #+sparc (filler)
   (value :c-type "long double" :length #+x86 3 #+sparc 4))
 
+(define-primitive-object (udef-inttype :widetag udef-inttype-widetag))
+
 ;;; FIXME: the primitive-type should probably be named COMPLEX-RATIONAL
 ;;; but that was more invasive than renaming just the widetag
 (define-primitive-object (complex :type complex

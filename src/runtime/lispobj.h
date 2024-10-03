@@ -31,6 +31,7 @@ is_lisp_immediate(lispobj obj)
     int widetag;
     return (fixnump(obj)
             || ((widetag = header_widetag(obj)) == CHARACTER_WIDETAG)
+            || (widetag == UDEF_INTTYPE_WIDETAG)
 #if N_WORD_BITS == 64
             || (widetag == SINGLE_FLOAT_WIDETAG)
 #endif
@@ -131,6 +132,7 @@ static inline int is_cons_half(lispobj obj)
     if (fixnump(obj) || is_lisp_pointer(obj)) return 1;
     int widetag = header_widetag(obj);
     return widetag == CHARACTER_WIDETAG ||
+           widetag == UDEF_INTTYPE_WIDETAG ||
 #if N_WORD_BITS == 64
            widetag == SINGLE_FLOAT_WIDETAG ||
 #endif

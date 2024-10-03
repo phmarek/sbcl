@@ -222,9 +222,19 @@
            (if (functionp object) 'funcallable-instance 'instance)))
        (let* ((classoid (layout-classoid layout))
               (name (classoid-name classoid)))
-         ;; FIXME: should the first test be (not (or (%instancep) (%funcallable-instance-p)))?
-         ;; God forbid anyone makes anonymous classes of generic functions.
-         (cond ((not (%instancep object))
+         (cond ;; cold compilation already does type derivations,
+               ;; but sb-xc:*features* (from src/cold/shebang.lisp) isn't active?
+               ;#- #.(cl:find :sb-xc sb-xc:*features*)
+               ;#-sb-xc
+               ;; the predicate doesn't exist during xc
+               ((= sb-vm::udef-inttype-widetag
+                   (ldb (byte sb-vm:n-widetag-bits 0)
+                        (sb-kernel:get-lisp-obj-address object)))
+                ;(udef-inttype-p object)
+                (sb-int:udef-inttype-type-of object))
+               ;; FIXME: should the first test be (not (or (%instancep) (%funcallable-instance-p)))?
+               ;; God forbid anyone makes anonymous classes of generic functions.
+               ((not (%instancep object))
                 name)
                ((eq name 'sb-alien-internals:alien-value)
                 `(alien ,(sb-alien-internals:unparse-alien-type

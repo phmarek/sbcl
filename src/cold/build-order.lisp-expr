@@ -729,4 +729,8 @@
   "src/code/repack-xref"
   #+cheneygc "src/code/purify"
   "src/code/module"
-  "src/code/save"))
+  "src/code/save")
+
+#-sb-xc
+  ("src/code/target-udef-inttype")
+  )

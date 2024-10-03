@@ -219,7 +219,7 @@
   weak-pointer-widetag                            ;  52   59
   fdefn-widetag                                   ;  56   5D
 
-  unused-widetag                                  ;  5A   61
+  udef-inttype-widetag                            ;  5A   61
   #+sb-simd-pack simd-pack-widetag                ;       65
   #-sb-simd-pack unused01-widetag                 ;  5E
   #+sb-simd-pack-256 simd-pack-256-widetag        ;       69
@@ -313,6 +313,7 @@
     (unbound-marker-widetag "unbound-marker")
     (weak-pointer-widetag "weakptr")
     (fdefn-widetag "fdefn")
+    (udef-inttype-widetag "udef")
     (simd-pack-widetag "SIMD-pack")
     (simd-pack-256-widetag "SIMD-pack256")
     (filler-widetag "filler")
