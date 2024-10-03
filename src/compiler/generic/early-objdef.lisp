@@ -209,7 +209,7 @@
   simple-fun-widetag                              ;  3A   41
   closure-widetag                                 ;  3E   45
 
-  unused10-widetag                                ;  42   49
+  udef-immediate-widetag                                ;  42   49
 
   value-cell-widetag                              ;  46   4D
   character-widetag                               ;  4A   51
@@ -314,6 +314,7 @@
     (unbound-marker-widetag "unbound-marker")
     (weak-pointer-widetag "weakptr")
     (fdefn-widetag "fdefn")
+    (udef-immediate-widetag "udef")
     #+sb-simd-pack (simd-pack-widetag "SIMD-pack")
     #+sb-simd-pack-256 (simd-pack-256-widetag "SIMD-pack256")
     #+sb-simd-pack-512 (simd-pack-512-widetag "SIMD-pack512")
