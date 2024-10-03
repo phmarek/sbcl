@@ -218,6 +218,13 @@
      (type-specifier (ctype-of object)))
     (simple-fun 'compiled-function)
     (t
+      ;; Should that be special-coded in layout-of in
+      ;; src/compiler/x86-64/system.lisp:90 ??
+      (when (= sb-vm:udef-immediate-widetag
+               (logand (get-lisp-obj-address object)
+                       sb-vm:widetag-mask))
+        ;; TODO subtypes
+        (return-from type-of 'udef-immediate))
      (let ((layout (layout-of object)))
        (when (= (get-lisp-obj-address layout) 0)
          (return-from type-of
