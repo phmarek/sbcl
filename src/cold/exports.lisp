@@ -779,6 +779,8 @@ possibly temporarily, because it might be used internally.")
    "CONSTANT-DISPLACEMENT"
    "EXTENDED-FUNCTION-DESIGNATOR"
    "EXTENDED-FUNCTION-DESIGNATOR-P"
+   "UDEF-INTTYPE" "UDEF-INTTYPE-P" "UDEF-INTTYPE-LOWTAG"
+   "MAKE-UDEF-INTTYPE" "UDEF-INTTYPE-VALUE"
    ;; ..and type predicates
 
    "DOUBLE-FLOAT-P"
@@ -2979,6 +2981,7 @@ structure representations")
            "SIMPLE-FUN-NAME-SLOT"
            "SIMPLE-FUN-ENTRY-SAP"
            "FUN-POINTER-LOWTAG"
+           "UDEF-INTTYPE-LOWTAG"
            "FUNCTION-LAYOUT"
            "SIMPLE-FUN-INFO-SLOT"
            "SIMPLE-FUN-SELF-SLOT"
@@ -3654,3 +3657,32 @@ package is deprecated in favour of SB-MOP.")
            "PROTO-FN-NAME"
            "PROTO-FN-PRETTY-ARGLIST"
            "TYPE-CHECK"))
+
+(defpackage "SB-UDEF-INTTYPE"
+  (:documentation "User-defined integer types")
+  (:use "CL" "SB-INT") ; "SB-EXT" "SB-SYS" "SB-KERNEL"
+  #+(or)
+  (:import-from "SB-IMPL"
+  ;              ;"UDEF-INTTYPE"
+  ;              "MAKE-UDEF-INTTYPE" "UDEF-INTTYPE-VALUE"
+  ;              "UDEF-INTTYPE-P"
+  ;             "+UDEF-RESERVED-LOW-BITS+"
+              "UDEF-METADATA"
+              "UDEF-METADATA-UDEF-READER"
+              "UDEF-METADATA-UDEF-MAKER"
+              "UDEF-METADATA-MAX-BITS"
+           )
+  (:export "REGISTER-UDEF-SUBTYPE-ID"
+           "HASH-UDEF"
+           "DEF-UDEF-INTTYPE"
+           "UDEF-INTTYPE-TYPE-OF"
+           "+UDEF-RESERVED-LOW-BITS+"
+           "DEF-UDEF-INTTYPE"
+
+  ) #+(or)(
+           "UDEF-METADATA"
+           "UDEF-METADATA-READER"
+           "UDEF-METADATA-MAKER"
+           "UDEF-METADATA-TYPE-P"
+           "UDEF-METADATA-MAX-BITS"
+           ))
