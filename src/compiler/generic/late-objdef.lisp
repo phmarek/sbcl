@@ -156,6 +156,7 @@
                 (member (logand byte lowtag-mask)
                         `(,instance-pointer-lowtag
                           ,list-pointer-lowtag
+                          ,udef-inttype-lowtag
                           ,fun-pointer-lowtag
                           ,other-pointer-lowtag))
                 (member byte `(#+64-bit ,single-float-widetag
@@ -186,6 +187,8 @@
     (dotimes (i 256)
       (cond ((eql 0 (logand i fixnum-tag-mask))
              (setf (svref scavtab i) "immediate" (svref sizetab i) "immediate"))
+            ((eql udef-inttype-lowtag (logand i lowtag-mask))
+             (setf (svref scavtab i) "immediate" (svref sizetab i) "immediate"))
             (t
              (let ((pointer-kind (case (logand i lowtag-mask)
                                    (#.instance-pointer-lowtag "instance")
@@ -206,6 +209,7 @@
             (aref sizetab #xff) "consfiller")
       (setf (nth instance-pointer-lowtag ptrtab) "scav_instance_pointer"
             (nth list-pointer-lowtag ptrtab)     "scav_list_pointer"
+            (nth udef-inttype-lowtag ptrtab)     "scav_immediate"
             (nth fun-pointer-lowtag ptrtab)      "scav_fun_pointer"
             (nth other-pointer-lowtag ptrtab)    "scav_other_pointer"))
     (dolist (entry *scav/trans/size*)

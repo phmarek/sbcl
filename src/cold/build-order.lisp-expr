@@ -723,6 +723,7 @@
   "src/code/run-program"
   #+win32 "src/code/warm-mswin"
   "src/code/traceroot"
+  "src/code/target-udef-inttype"
 
   "src/code/query"
   "src/code/timer"
