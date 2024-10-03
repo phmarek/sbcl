@@ -224,7 +224,7 @@
   #+sb-simd-pack-256 simd-pack-256-widetag        ;       69
   #-sb-simd-pack-256 unused03-widetag             ;  62
   filler-widetag                                  ;  66   6D
-  unused04-widetag                                ;  6A   71
+  udef-immediate-widetag                          ;  6A   71
   unused05-widetag                                ;  6E   75
   unused06-widetag                                ;  72   79
   unused07-widetag                                ;  76   7D
@@ -311,6 +311,7 @@
     (unbound-marker-widetag "unbound-marker")
     (weak-pointer-widetag "weakptr")
     (fdefn-widetag "fdefn")
+    (udef-immediate-widetag "udef")
     (simd-pack-widetag "SIMD-pack")
     (simd-pack-256-widetag "SIMD-pack256")
     (filler-widetag "filler")
