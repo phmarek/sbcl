@@ -50,6 +50,7 @@
 
 (define-type-vop single-float-p (single-float-widetag))
 
+;; Ineffective because they're lowtags!!
 (define-type-vop fixnump #.fixnum-lowtags)
 
 (define-type-vop functionp (fun-pointer-lowtag))
