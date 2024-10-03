@@ -34,6 +34,7 @@ is_lisp_immediate(lispobj obj)
 #if N_WORD_BITS == 64
             || (widetag == SINGLE_FLOAT_WIDETAG)
 #endif
+            || (widetag == UDEF_INTTYPE_LOWTAG)
             || (widetag == UNBOUND_MARKER_WIDETAG));
 }
 

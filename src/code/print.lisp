@@ -628,6 +628,28 @@ variable: an unreadable object representing the error is printed instead.")
         (return-from output-ugly-object
           (print-unreadable-object (object stream :identity t)
             (prin1 'funcallable-instance stream))))))
+  (when (udef-inttype-p object)
+    (return-from output-ugly-object
+      (multiple-value-bind (type val) (udef-inttype-type-of object)
+        (cond
+          (type
+           ;print-unreadable-object (object stream :identity nil :type nil)
+           (write-string "#<" stream)
+           (write-string (symbol-name type) stream)
+           (write-string " #x" stream)
+           (write val
+                  :base 16
+                  :radix nil
+                  :stream stream)
+           (write-string ">" stream))
+          (t
+           (write-string "#<udef??? #x" stream)
+           (write (get-lisp-obj-address object)
+                  :base 16
+                  :radix nil
+                  :stream stream)
+           (write-string ">" stream)))
+        val)))
   (print-object object stream))
 
 ;;;; symbols
