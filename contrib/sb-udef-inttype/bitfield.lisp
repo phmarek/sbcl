@@ -67,8 +67,8 @@
                              :id ,udef-inttype-id
                              :max-bits ,max-bits
                              ;; TODO: derive max-bits
-                             :constructor ,udef-maker
-                             :reader ,udef-reader)
+                             :to-udef ,udef-maker
+                             :from-udef ,udef-reader)
                            ;;
                            (defun ,constructor-name (&key ,@ (mapcar #'list slot-names init-vals))
                              ,@ (loop for n in slot-names

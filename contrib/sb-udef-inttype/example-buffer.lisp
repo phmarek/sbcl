@@ -54,7 +54,7 @@
 (defparameter *stgs*
   (let ((sem (sb-thread:make-semaphore))
         (per-thread 40000)
-        (thread-count 40))
+        (thread-count 70))
     (reset-stgs)
     (loop for i below thread-count
           collect (sb-thread:make-thread #'thread-do

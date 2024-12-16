@@ -28,10 +28,26 @@
           (sb-udef-inttype::column-struct-size my-foo-data)))
 
 
+;; Test pre-declaration, for self-referencing stuff
+(sb-udef-inttype::def-udef-inttype bar
+  :to-udef to-bar-udef
+  :from-udef from-bar-udef
+  :nil-as-minus-1 t
+  :max-bits 32)
+
+(to-bar-udef nil)
+(sb-c::make-udef-inttype
+  (LOGIOR 238
+          (ASH
+            (IF (AND T (EQ nil NIL))
+                4294967295
+                nil)
+            SB-IMPL::+UDEF-TAG-BITS+)))
+
+
 (sb-udef-inttype:def-column-struct (bar
-                                      (:max-bits 32)
+                                      ;(:max-bits 32)
                                       (:batched 8)
-                                      (:udef-maker make-bar-udef)
                                       (:constructor make-my-bar)
                                       (:base-constructor make-my-bar-base)
                                       (:initial-size 5)
@@ -42,6 +58,7 @@
   (vec 0 :type (array (unsigned-byte 32) 3))
   (typed-ref% 0 :type (unsigned-byte 32))
   (ref *no-foo* :type T)
+  (self nil :type bar)
   (udef *no-foo* :type foo))
 
 
@@ -116,7 +133,7 @@
                   (mapcar #'sb-thread:join-thread threads)))
   (loop with ht = (make-hash-table :test #'eq)
         for i below (sb-udef-inttype:column-struct-last-index 'bar)
-        for u = (make-bar-udef i)
+        for u = (to-bar-udef i)
         do (incf (gethash (bar-ref u) ht 0))
         finally
         (return
