@@ -6,6 +6,7 @@
   :components ((:file "package")
                (:file "column-structure")
                (:file "bitfield")
+               (:file "udef-lookup")
                (:file "buffer-indexing")
                ;example-column-structure.lisp
                ;example.lisp

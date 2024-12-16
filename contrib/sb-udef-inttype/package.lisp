@@ -3,13 +3,19 @@
   (:use :common-lisp)
   (:import-from :sb-impl
                 #:def-udef-inttype
-                #:udef-metadata
-                #:udef-metadata-udef-reader
-                #:udef-metadata-udef-maker
-                #:udef-metadata-max-bits
                 #:udef-inttype-type-of
+                #:udef-metadata
+                #:udef-metadata-from-udef
+                #:udef-metadata-to-udef
+                #:udef-metadata-store-udef
+                #:udef-metadata-retr-udef
+                #:udef-metadata-type-p
+                #:udef-metadata-max-bits
+                #:get-existing-udef-f-t-p-b
+                #:get-existing-udef-id
                 )
-  (:export #:def-column-struct
+  (:export #:def-udef-inttype
+           #:def-column-struct
            #:column-struct-resize
            #:make-wrapped-udef-accessor
            #:column-struct-reset
@@ -17,6 +23,10 @@
            #:column-struct-size
            #:column-struct-last-index
            #:column-struct-get-struct
+
+           #:map-c-s-range
+           #:c-s-values
+           #:with-c-s-slots
 
            #:def-bitfield-struct
 
