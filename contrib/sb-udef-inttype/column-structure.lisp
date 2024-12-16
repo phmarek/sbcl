@@ -466,7 +466,7 @@
                                ))))
     (loop for (ext-name init% type%) in normalized-slots
           ;; TODO: :CONC-NAME behaviour
-          for e-accessor = (sb-int:symbolicate struct-name ext-name)
+          for e-accessor = (sb-int:symbolicate struct-name "-" ext-name)
           ;; To avoid collisions, we generate own internal slot names.
           ;; This also reduces pollution in the keyword package by having
           ;; always the same sequential names -- and inheriting COLUMN-STRUCTs

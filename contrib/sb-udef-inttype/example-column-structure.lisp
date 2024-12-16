@@ -35,16 +35,6 @@
   :nil-as-minus-1 t
   :max-bits 32)
 
-(to-bar-udef nil)
-(sb-c::make-udef-inttype
-  (LOGIOR 238
-          (ASH
-            (IF (AND T (EQ nil NIL))
-                4294967295
-                nil)
-            SB-IMPL::+UDEF-TAG-BITS+)))
-
-
 (sb-udef-inttype:def-column-struct (bar
                                       ;(:max-bits 32)
                                       (:batched 8)
@@ -76,6 +66,7 @@
 (setf (bar-udef *a-bar*)
       (make-foo))
 
+#+(or)
 (disassemble 'bar-name)
 
 (sb-udef-inttype::column-struct-size 'bar)

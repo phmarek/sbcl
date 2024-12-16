@@ -12,7 +12,8 @@
                 #:get-existing-udef-f-t-p-b
                 #:get-existing-udef-id
                 )
-  (:export #:def-column-struct
+  (:export #:def-udef-inttype
+           #:def-column-struct
            #:column-struct-resize
            #:make-wrapped-udef-accessor
            #:column-struct-reset
