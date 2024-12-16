@@ -230,7 +230,9 @@
                                           ,name)
                                 ,to-udef-fn))
                 (defun ,to-udef-fn (x)
-                  (declare (optimize (speed 3) (debug 1) (safety 1)))
+                  (declare (optimize (speed 3) (debug 1) (safety 1))
+                           (type (or null
+                                     (unsigned-byte ,max-bits)) x))
                   (make-udef-inttype (logior ,id
                                              (ash (if (and ,(and nil-as-minus-1 t)
                                                            (eq x nil))
