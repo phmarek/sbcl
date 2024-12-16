@@ -102,7 +102,7 @@
       (values nil 0)))
 
 (defstruct udef-metadata
-  (id             0 :type (integer 0 255) :read-only t)
+  (udef-id        0 :type (integer 0 255) :read-only t)
   ;; A slot called TYPEP doesn't work with default args in DEFSTRUCT
   (type-p       nil :type symbol          :read-only t)
   (to-udef      nil :type symbol          :read-only t)
@@ -117,7 +117,7 @@
   (let* ((prev-def% (get name 'udef-metadata))
          (prev-def (when (udef-metadata-p prev-def%)
                         prev-def%)))
-    (values (and prev-def (get-existing-udef-id    name))
+    (values (and prev-def (udef-metadata-udef-id   prev-def))
             (and prev-def (udef-metadata-from-udef prev-def))
             (and prev-def (udef-metadata-to-udef   prev-def))
             (and prev-def (udef-metadata-type-p    prev-def))
@@ -163,13 +163,6 @@
          (eval-when (:compile-toplevel :load-toplevel :execute)
            (deftype ,name () 'sb-int:udef-inttype))
          ;;
-         (setf (get ',name 'udef-metadata)
-               (make-udef-metadata
-                 :to-udef  ',to-udef-fn
-                 :from-udef ',from-udef-fn
-                 :type-p ',typep-fn
-                 :max-bits ,max-bits))
-         ;;
          ;; TODO: box/unbox
          (declaim (inline ,typep-fn)
                   (ftype (function (T) (member t nil)) ,typep-fn))
@@ -200,6 +193,15 @@
                       (= num ,mask))
                  nil
                  num)))
+         ;;
+         (setf (get ',name 'udef-metadata)
+               (make-udef-metadata
+                 :udef-id ,id
+                 :to-udef  ',to-udef-fn
+                 :from-udef ',from-udef-fn
+                 :type-p ',typep-fn
+                 :max-bits ,max-bits))
+         ;;
          ',name))))
 
 
