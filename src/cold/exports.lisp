@@ -3668,13 +3668,15 @@ package is deprecated in favour of SB-MOP.")
            )
   (:export "REGISTER-UDEF-SUBTYPE-ID"
            "HASH-UDEF"
+           "DEF-UDEF-INTTYPE"
            "UDEF-INTTYPE-TYPE-OF"
            "+UDEF-RESERVED-LOW-BITS+"
            "DEF-UDEF-INTTYPE"
 
   ) #+(or)(
            "UDEF-METADATA"
-           "UDEF-METADATA-UDEF-READER"
-           "UDEF-METADATA-UDEF-MAKER"
+           "UDEF-METADATA-READER"
+           "UDEF-METADATA-MAKER"
+           "UDEF-METADATA-TYPE-P"
            "UDEF-METADATA-MAX-BITS"
            ))

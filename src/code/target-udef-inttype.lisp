@@ -31,6 +31,11 @@
   NIL until first use.")
 
 
+(defun get-existing-udef-id (name &key (start 0))
+  (position name *udef-types*
+            :test #'eq
+            :start start))
+
 (defun register-udef-subtype-id (type-name &key (random t))
   "Looks for a free ID in *UDEF-TYPES*,
   and registers TYPE-NAME.
@@ -41,16 +46,16 @@
       (setf *udef-types* (make-array len
                                      :initial-element nil
                                      :element-type 'symbol)))
-    (let ((id (or (position type-name *udef-types* :test #'eq)
+    (let ((id (or (get-existing-udef-id type-name)
                   (when random
                     (loop repeat 3
                           for i = (random len)
                           if (null (aref *udef-types* i))
                           return i
                           finally (return
-                                    (position nil *udef-types*
-                                              :start (random len)))))
-                  (position nil *udef-types*))))
+                                    (get-existing-udef-id nil
+                                                          :start (random len)))))
+                  (get-existing-udef-id nil))))
       (unless id
         (error "too many user-defined integer types in use."))
       (setf (aref *udef-types* id)
@@ -97,79 +102,105 @@
       (values nil 0)))
 
 (defstruct udef-metadata
-  (udef-maker   nil :type symbol     :read-only t)
-  (udef-reader  nil :type symbol     :read-only t)
-  (max-bits       0 :type (integer 1 48) :read-only t)
-  )
-(export '( udef-metadata
-           udef-metadata-udef-reader
-           udef-metadata-udef-maker
-           udef-metadata-max-bits))
+  (id             0 :type (integer 0 255) :read-only t)
+  ;; A slot called TYPEP doesn't work with default args in DEFSTRUCT
+  (type-p       nil :type symbol          :read-only t)
+  (to-udef      nil :type symbol          :read-only t)
+  (from-udef    nil :type symbol          :read-only t)
+  (max-bits       0 :type (integer 1 48)  :read-only t))
 
-(defmacro def-udef-inttype (name &key constructor
-                                 reader
+(defun get-existing-udef-f-t-p-b (name)
+  "Returns the ID,
+  the from-udef, to-udef, and TYPEP functions,
+  and the number of bits
+  as multiple values if NAME is a defined UDEF."
+  (let* ((prev-def% (get name 'udef-metadata))
+         (prev-def (when (udef-metadata-p prev-def%)
+                        prev-def%)))
+    (values (and prev-def (get-existing-udef-id    name))
+            (and prev-def (udef-metadata-from-udef prev-def))
+            (and prev-def (udef-metadata-to-udef   prev-def))
+            (and prev-def (udef-metadata-type-p    prev-def))
+            (and prev-def (udef-metadata-max-bits  prev-def)))))
+
+(export '( udef-metadata
+           udef-metadata-from-udef
+           udef-metadata-to-udef
+           udef-metadata-type-p
+           udef-metadata-max-bits
+           get-existing-udef-f-t-p-b))
+
+(defmacro def-udef-inttype (name &key to-udef
+                                 from-udef
                                  id
                                  typep
                                  (nil-as-minus-1 t)
                                  (max-bits +udef-usable-remaining-bits+))
   "Defines a new user-defined integer type."
-  (let* ((old-id (position name *udef-types*))
-         (id (cond
-               ((and old-id       id  (= old-id id))  id)
-               ((and (not old-id) id)                 id)
-               (old-id                            old-id)
-               (t
-                (register-udef-subtype-id name))))
-         (mask (1- (ash 1 max-bits)))
-         (typep-fn (or typep
-                       (intern (format nil "~a-~a" name :p)
-                               (symbol-package name))))
-         (read-fn (or reader
-                      (intern (format nil "~a-~a-~a" :get name :value)
-                              (symbol-package name))))
-         (make-fn (or constructor
-                      (intern (format nil "~a-~a" :MAKE name)
-                              (symbol-package name)))))
-    `(progn
-       (eval-when (:compile-toplevel :load-toplevel :execute)
-         (deftype ,name () 'sb-int:udef-inttype))
-       ;;
-       (setf (get ',name 'udef-metadata)
-             (make-udef-metadata
-               :udef-maker ',make-fn
-               :udef-reader ',read-fn
-               :max-bits ,max-bits))
-       ;;
-       ;; TODO: box/unbox
-       (declaim (inline ,typep-fn)
-                (ftype (function (T) (member t nil)) ,typep-fn))
-       (declaim (inline ,read-fn)
-                (ftype (function (,name)
-                                 (values (or (unsigned-byte ,max-bits)
-                                             ,@ (when nil-as-minus-1
-                                                  `(null))) ))
-                                 ,read-fn))
-       (declaim (inline ,make-fn)
-                (ftype (function ( (or (unsigned-byte ,max-bits)
-                                       ,@ (when nil-as-minus-1
-                                            `(null))) )
-                                 T #+(or),name) ,make-fn))
-       (defun ,typep-fn (x)
-         (= ,id (udef-inttype-tag x)))
-       (defun ,make-fn (x)
-         (make-udef-inttype (logior ,id
-                                    (ash (if (and ,(and nil-as-minus-1 t)
-                                                 (eq x nil))
-                                             ,mask
-                                             x)
-                                         +udef-tag-bits+))))
-       (defun ,read-fn (x)
-         (let ((num (udef-general-get-value x)))
-           (if (and ,(and nil-as-minus-1 t)
-                    (= num ,mask))
-               nil
-               num)))
-       ',name)))
+  (multiple-value-bind (old-id old-from-udef old-to-udef old-typep old-bits)
+      (get-existing-udef-f-t-p-b name)
+    (let* ((id (cond
+                 ((and old-id       id  (= old-id id))  id)
+                 ((and (not old-id) id)                 id)
+                 (old-id                            old-id)
+                 (t
+                  (register-udef-subtype-id name))))
+           (max-bits (or old-bits
+                         max-bits))
+           (mask (1- (ash 1 max-bits)))
+           ;; TODO: use *PACKAGE* instead of the NAMEs package?
+           (typep-fn (or old-typep
+                         typep
+                         (sb-int:symbolicate name :-P)))
+           (from-udef-fn (or old-from-udef
+                             from-udef
+                             (sb-int:symbolicate name :-from-udef)))
+           (to-udef-fn (or old-to-udef
+                           to-udef
+                           (sb-int:symbolicate :MAKE name))))
+      ;; TODO: tell if old definition overrode new values?
+      `(progn
+         (eval-when (:compile-toplevel :load-toplevel :execute)
+           (deftype ,name () 'sb-int:udef-inttype))
+         ;;
+         (setf (get ',name 'udef-metadata)
+               (make-udef-metadata
+                 :to-udef  ',to-udef-fn
+                 :from-udef ',from-udef-fn
+                 :type-p ',typep-fn
+                 :max-bits ,max-bits))
+         ;;
+         ;; TODO: box/unbox
+         (declaim (inline ,typep-fn)
+                  (ftype (function (T) (member t nil)) ,typep-fn))
+         (declaim (inline ,from-udef-fn)
+                  (ftype (function ( (or ,name
+                                         ,@ (when nil-as-minus-1
+                                              `(null))) )
+                                   (values (unsigned-byte ,max-bits)))
+                         ,from-udef-fn))
+         (declaim (inline ,to-udef-fn)
+                  (ftype (function ( (or (unsigned-byte ,max-bits)
+                                         ,@ (when nil-as-minus-1
+                                              `(null))) )
+                                   ,name)
+                         ,to-udef-fn))
+         (defun ,typep-fn (x)
+           (= ,id (udef-inttype-tag x)))
+         (defun ,to-udef-fn (x)
+           (make-udef-inttype (logior ,id
+                                      (ash (if (and ,(and nil-as-minus-1 t)
+                                                    (eq x nil))
+                                               ,mask
+                                               x)
+                                           +udef-tag-bits+))))
+         (defun ,from-udef-fn (x)
+           (let ((num (udef-general-get-value x)))
+             (if (and ,(and nil-as-minus-1 t)
+                      (= num ,mask))
+                 nil
+                 num)))
+         ',name))))
 
 
 (defun udef-eq (u1 u2)
