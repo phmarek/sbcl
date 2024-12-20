@@ -1,54 +1,67 @@
 (defpackage :buffer-index-example
   (:use :cl))
 
-(use-package :buffer-index-example)
+(in-package :buffer-index-example)
 
 (require :sb-udef-inttype)
 
-  (setf (extern-alien "pre_verify_gen_0" int) 1)
-  (setf (extern-alien "verify_gens" char) 0)
+  (setf (sb-alien:extern-alien "pre_verify_gen_0" sb-alien:int) 1)
+  (setf (sb-alien:extern-alien "verify_gens" sb-alien:char) 0)
+
 
 (sb-udef-inttype:make-udef-addressed-buffer blobs
-                                                    :len-bits 4
-                                                    :index-bits 12
-                                                    :element-type (unsigned-byte 8)
-                                                    :reader-sym get-blob
-                                                    :writer-sym save-blob
-                                                    :reset-sym reset-blobs
-                                                    :length-sym blob-length
-                                                    :buffer-sym blob-data
-                                                    :initial-size 32
-                                                    :batch-size 16)
+                                            :len-bits 4
+                                            :index-bits 12
+                                            :element-type (unsigned-byte 8)
+                                            :reader-sym get-blob
+                                            :writer-sym save-blob
+                                            :reset-sym reset-blobs
+                                            :length-sym blob-length
+                                            :buffer-sym blob-data
+                                            :initial-size 32
+                                            :batch-size 16
+                                            :dedup-save-fn save-unique-blob
+                                            :dedup-size 35
+                                            :dedup-storage-sym blob-dedup-data
+                                            )
 
 (reset-blobs)
-(loop for i below 15
-      collect (save-blob (make-array i
-                                     :element-type '(unsigned-byte 8)
-                                     :initial-element i)) into addr
+(loop for i below 400
+      for val = (make-array (mod i 13)
+                               :element-type '(unsigned-byte 8)
+                               :initial-element (mod i 255))
+      for udef = (save-unique-blob val)
+      for udef2 = (save-unique-blob (copy-seq val))
+      for udef3 = (save-unique-blob (get-blob udef2))
+      do (assert (eq udef udef2))
+      do (assert (eq udef udef3))
+      collect udef into addr
       finally (return (loop for a in addr
                             collect (get-blob a))))
 
 
 
 (sb-udef-inttype:make-udef-addressed-buffer strings
-                                                    :len-bits 8
-                                                    :index-bits 32
-                                                    :element-type character
-                                                    :reader-sym get-stg
-                                                    :writer-sym save-stg
-                                                    :reset-sym reset-stgs
-                                                    :length-sym stg-length
-                                                    :buffer-sym stg-data
-                                                    :maker stg-udef-maker
-                                                    :initial-size 0
-                                                    :batch-size 32768)
+                                            :len-bits 8
+                                            :index-bits 32
+                                            :element-type character
+                                            :reader-sym get-stg
+                                            :writer-sym save-stg
+                                            :reset-sym reset-stgs
+                                            :length-sym stg-length
+                                            :buffer-sym stg-data
+                                            :maker stg-udef-maker
+                                            :dedup-save-fn save-unique-string
+                                            :dedup-size (* 40000 70 1/10)
+                                            :dedup-storage-sym string-dedup-data
+                                            :batch-size (* 16 1024))
 
 (defun thread-do (me n &key sem)
   (when sem
     (sb-thread:wait-on-semaphore sem))
   (loop with base = (* me n)
         for i below n
-        collect (save-stg (format nil "-~d " (+ i base)))))
+        collect (save-unique-string (format nil "-~d " (+ i base)))))
 
 (sb-ext:gc :full t)
 (defparameter *stgs*
@@ -97,3 +110,4 @@
                    ()
                    "Value ~s wrong, from ~s" v a)
         finally (format t "got ~d correct~&" i)))
+

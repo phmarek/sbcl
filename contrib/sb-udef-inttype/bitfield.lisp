@@ -29,9 +29,9 @@
         (let* ((udef-inttype-id (or old-id
                                     (option :udef-inttype-id nil)))
                (udef-maker (or old-to-u
-                               (option :udef-maker (gensym "UDEF-MAKER-"))))
+                               (option :udef-maker (sb-int:gensymify* "UDEF-MAKER-" struct-name))))
                (udef-reader (or old-from-u
-                                (option :udef-reader (gensym "UDEF-READER-"))))
+                                (option :udef-reader (sb-int:gensymify* "UDEF-READER-" struct-name))))
                (max-bits (or old-bits
                              (option :max-bits sb-impl::+udef-usable-remaining-bits+)))
                (constructor-name (option :constructor
@@ -70,12 +70,13 @@
                 finally (return
                           `(progn
                              ;;(deftype ,struct-name () 'sb-int:udef-inttype)
-                             (sb-impl::def-udef-inttype ,struct-name
-                               :id ,udef-inttype-id
-                               :max-bits ,max-bits
-                               ;; TODO: derive max-bits
-                               :to-udef ,udef-maker
-                               :from-udef ,udef-reader)
+                             ,(unless old-id
+                                `(sb-impl::def-udef-inttype ,struct-name
+                                   :id ,udef-inttype-id
+                                   :max-bits ,max-bits
+                                   ;; TODO: derive max-bits
+                                   :to-udef ,udef-maker
+                                   :from-udef ,udef-reader))
                              ;;
                              (defun ,constructor-name (&key ,@ (mapcar #'list slot-names init-vals))
                                ,@ (loop for n in slot-names

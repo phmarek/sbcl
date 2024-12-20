@@ -49,6 +49,9 @@
   (typed-ref% 0 :type (unsigned-byte 32))
   (ref *no-foo* :type T)
   (self nil :type bar)
+  (self-vec (make-array 4 :element-type 'bar
+                        :initial-element (to-bar-udef nil))
+            :type (array bar (4)))
   (udef *no-foo* :type foo))
 
 

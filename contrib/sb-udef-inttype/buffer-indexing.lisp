@@ -59,55 +59,59 @@
                 (map 'list #'sb-kernel:get-lisp-obj-address old
                      ))))))
 
-
 (defmacro make-udef-addressed-buffer (name &key (len-bits 8) (index-bits 24)
                                            (element-type 'character)
                                            (reader-sym (sb-int:symbolicate :GET- name))
                                            (writer-sym (sb-int:symbolicate :SAVE- name))
                                            (reset-sym (sb-int:symbolicate :RESET- name))
                                            (length-sym (sb-int:symbolicate name :-LENGTH))
+                                           ;;
                                            (pos-sym (sb-int:gensymify* name :-POS))
                                            (maker (sb-int:gensymify* name :-MAKER))
+                                           (reader (sb-int:gensymify* name :-READER))
                                            (buffer-sym (sb-int:gensymify* name :-STORAGE))
-                                           (lock-sym (sb-int:gensymify* name :-LOCK))
                                            (eob-sym (sb-int:gensymify* name :-EOB))
-                                           (initial-size (* 1024 (expt 2 len-bits)))
-                                           (batch-size (default-batch-size initial-size))
+                                           (lock-sym (sb-int:gensymify* name :-LOCK))
+                                           ;;
+                                           (dedup-save-fn nil)
+                                           (dedup-retrieval nil)
+                                           (dedup-storage-sym (sb-int:gensymify* name :-DEDUP-STORAGE))
+                                           (dedup-clear-fn (sb-int:gensymify* name :-DEDUP-CLEAR))
+                                           (dedup-size nil)
+                                           ;;
+                                           (batch-size (* 1024 1024) #+(or)(default-batch-size initial-size))
                                            (initial-element (if (subtypep element-type 'character)
                                                                 (code-char 0)
                                                                 0))
                                            )
+  (when (and dedup-save-fn
+             (not dedup-size))
+    (error "Deduplication wanted but no vector size given"))
+  (let ((n-batch-size (eval batch-size)))
   `(progn
      (def-bitfield-struct
        (,name
          (:constructor ,maker)
+         (:reader ,reader)
          (:max-bits ,(+ len-bits index-bits)))
        (len 0 :type (unsigned-byte ,len-bits)   :accessor ,length-sym)
        (pos 0 :type (unsigned-byte ,index-bits) :accessor ,pos-sym))
-  ;;
+     ;;
      (declaim (type sb-vm:word ,eob-sym))
-     (defvar ,eob-sym 0)
+     (defparameter ,eob-sym 0)
      (declaim (sb-ext:always-bound ,eob-sym))
      ;;
-     (defvar ,buffer-sym (make-array (list 0)
-                                     :element-type '(array ,element-type (,batch-size))
+     (defparameter ,buffer-sym (make-array (list 0)
+                                     :element-type `(simple-array ,',element-type (,,n-batch-size))
                                      :fill-pointer 0
                                      :adjustable t))
      ;;
-     (defvar ,lock-sym (sb-thread:make-mutex :name ,(symbol-name name)))
-     ;;
-     (defun ,reset-sym ()
-       (setf ,eob-sym 0)
-       (setf ,buffer-sym
-             (make-array (list 0)
-                         :element-type '(array ,element-type (,batch-size))
-                         :fill-pointer 0
-                         :adjustable t)))
+     (defparameter ,lock-sym (sb-thread:make-mutex :name ,(symbol-name name)))
      ;;
      (declaim (ftype (function (,name) (vector ,element-type)) ,reader-sym))
      (defun ,reader-sym (udef)
        (let* ((p (,pos-sym udef)))
-         (multiple-value-bind (outer-idx offset) (floor p ,batch-size)
+         (multiple-value-bind (outer-idx offset) (floor p ,n-batch-size)
        (subseq (aref ,buffer-sym outer-idx)
                offset
                (+ offset (,length-sym udef))))))
@@ -116,7 +120,7 @@
      (defun ,writer-sym (input)
        (let ((len (length input)))
          (flet ((put (x)
-                  (multiple-value-bind (idx off) (floor x ,batch-size)
+                  (multiple-value-bind (idx off) (floor x ,n-batch-size)
                     (when (plusp len)
                       (replace (aref ,buffer-sym idx)
                                input
@@ -128,7 +132,7 @@
                                            ,lock-sym
                                            (1+ i)
                                            (lambda ()
-                                             (make-array (list ,batch-size)
+                                             (make-array (list ,n-batch-size)
                                                          :element-type ',element-type
                                                          :initial-element ,initial-element)))
                   ))
@@ -136,12 +140,12 @@
              :retry
              ;; TODO: loop counter and abort?
              (let* ((now ,eob-sym))
-               (multiple-value-bind (old-idx old-offset) (floor now ,batch-size)
+               (multiple-value-bind (old-idx old-offset) (floor now ,n-batch-size)
                  (let ((end (+ old-offset len)))
-                   (when (> end ,batch-size)
+                   (when (> end ,n-batch-size)
                      ;; round up to next batch, retry
                      (extend old-idx)
-                     (let* ((batch-start (+ now (- ,batch-size old-offset)))
+                     (let* ((batch-start (+ now (- ,n-batch-size old-offset)))
                             (prev (sb-ext:compare-and-swap (symbol-value ',eob-sym)
                                                            now
                                                            (+ batch-start len))))
@@ -162,7 +166,33 @@
                      (if (= prev now)
                          (put now)
                          (go :retry))))))))))
-     ',name))
+     ;;
+     ,@(when dedup-save-fn
+         (sb-int:with-unique-names (saver)
+           `((define-udef-lookup ,dedup-size ,dedup-retrieval ,saver
+                              :table-sym ,dedup-storage-sym
+                              :clear-table-fn-sym ,dedup-clear-fn
+                              :key ,reader-sym
+                              :test ,(if (subtypep element-type 'character)
+                                         'string=
+                                         'equalp))
+            (defun ,dedup-save-fn (input)
+               (,saver input
+                       (lambda ()
+                         (,writer-sym input)))))))
+     ;;
+     (defun ,reset-sym ()
+       (setf ,eob-sym 0)
+       (setf ,buffer-sym
+             (make-array (list 0)
+                         :element-type '(array ,element-type (,n-batch-size))
+                         :fill-pointer 0
+                         :adjustable t))
+       ,(when dedup-save-fn
+          `(,dedup-clear-fn))
+       ',name)
+     ;;
+     ',name)))
 
 
 

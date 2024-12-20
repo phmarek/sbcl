@@ -136,13 +136,18 @@
   ;; Other slots added dynamically
   )
 
-(defun get-udef-metadata-from-symbol (sym)
-  (let ((v (or (get sym 'column-struct-data)
-               (get sym 'udef-metadata))))
-    (when v
-      (etypecase v
-        (symbol (symbol-value v))
-        (udef-metadata v)))))
+(defun get-udef-metadata-from-symbol (sym &optional c-s-req)
+  (when (symbolp sym)
+    (let ((v-c-s (get sym 'column-struct-data)))
+      (when (and c-s-req
+                 (not v-c-s))
+        (error "~s is not a column-structure type." sym))
+      (let ((v (or c-s-req
+                   (get sym 'udef-metadata))))
+        (when v
+          (etypecase v
+            (symbol (symbol-value v))
+            (udef-metadata v)))))))
 
 (defun get-upper-last-batch (obj)
   (let* ((lower (funcall (csu-lower-acc obj) obj))
@@ -168,9 +173,8 @@
   "Soft-resets OBJ, ie. sets the last used index to 0."
   (cond
     ((symbolp obj)
-     (let ((data (or (get obj 'column-struct-data)
-                     (error "~s is not a column-structure type." obj))))
-       (column-struct-reset (symbol-value data))))
+     (let ((data (get-udef-metadata-from-symbol obj t)))
+       (column-struct-reset data)))
     ((typep obj 'udef-c-s-only)
      (setf (c-s-mfill-pointer obj) 0))
     ((typep obj 'udef-c-s-lower)
@@ -187,9 +191,8 @@
   "Returns the allocated length (not the number of elements used)"
   (cond
     ((symbolp obj)
-     (let ((data (or (get obj 'column-struct-data)
-                     (error "~s is not a column-structure type." obj))))
-       (column-struct-size (symbol-value data))))
+     (let ((data (get-udef-metadata-from-symbol obj t)))
+       (column-struct-size data)))
     ((typep obj 'udef-c-s-only)
      (array-dimension (slot-value obj
                                   (first
@@ -207,9 +210,8 @@
   doesn't care about fragmentation with batched allocation."
   (cond
     ((symbolp obj)
-     (let ((data (or (get obj 'column-struct-data)
-                     (error "~s is not a column-structure type." obj))))
-       (column-struct-last-index (symbol-value data))))
+     (let ((data (get-udef-metadata-from-symbol obj t)))
+       (column-struct-last-index data)))
     ((typep obj 'udef-c-s-only)
      (c-s-mfill-pointer obj))
     ((typep obj 'udef-c-s-upper)
@@ -230,9 +232,7 @@
     ;; Optimizations possible
     (declare (ignore idx))
     (assert type)
-    (let* ((master-var (or (get type 'column-struct-data)
-                           (error "~s is not a column-structure index." obj)))
-           (udef (symbol-value master-var)))
+    (let* ((udef (get-udef-metadata-from-symbol type t)))
       (loop for name in (c-s-e-slot-names udef)
             for acc-fn in (c-s-e-acc-fn udef)
             if (eq output :alist)
@@ -245,8 +245,7 @@
   or just add new batches for a two-level column-struct."
   (cond
     ((symbolp obj)
-     (let ((data (or (get obj 'column-struct-data)
-                     (error "~s is not a column-structure type." obj))))
+     (let ((data (get-udef-metadata-from-symbol obj t)))
        (column-struct-resize (symbol-value data) new-size
                              :force-smaller force-smaller)))
     ;;
@@ -403,7 +402,8 @@
 
 
 (defun array-type-destructure (type% init)
-  "Returns vector type, slot type, argument type, element count, init form, single init value,
+  "Returns vector type, slot type, argument type, element count,
+  init form, single init value,
   and whether a conversion from/to UNSIGNED-BYTE should happen"
   (if (and (consp type%)
            (member (first type%) '(array vector simple-vector))
@@ -428,15 +428,15 @@
                              :element-type ',entry-type)
                 init
                 nil nil)))
-     (let* ((meta (and (symbolp type%)
-                  (get-udef-metadata-from-symbol type%)))
+     (let* ((meta (get-udef-metadata-from-symbol type%))
             (type (if meta
+                      ;; Is a slot containing a UDEF,
+                      ;; so use (UNSIGNED-BYTE x) instead
                       `(unsigned-byte ,(udef-metadata-max-bits meta))
                       type%))
             (init2 (if meta
-                       `(,(udef-metadata-from-udef meta) ,init)
+                       `(,(udef-metadata-from-udef meta) ,init t)
                        init)))
-            ;; Is a UDEF, so use (UNSIGNED-BYTE x) instead
        (list type type type%
              1
              init2
@@ -561,33 +561,33 @@
                                  batched%))
                  ;;
                  (udef-id (or old-id
-                                      (option :udef-inttype-id nil)))
+                              (option :udef-inttype-id nil)))
                  (from-udef (or old-from-u
-                                  (option :from-udef
-                                          (sb-int:gensymify* struct-name :-FROM-UDEF))))
+                                (option :from-udef
+                                        (sb-int:gensymify* struct-name :-FROM-UDEF))))
                  (to-udef (or old-to-u
-                                 (option :to-udef
-                                         (sb-int:gensymify* struct-name :-TO-UDEF))))
+                              (option :to-udef
+                                      (sb-int:gensymify* struct-name :-TO-UDEF))))
                  (udef-typep (or old-typep
                                  (option :udef-typep
                                          (sb-int:gensymify* struct-name :-TYPE-P))))
                  (max-bits (or old-bits
                                (option :max-bits 32)))
                  ;;
-                 (base-constructor (option :base-constructor (sb-int:gensymify* struct-name "CONSTRUCTOR")))
+                 (base-constructor (option :base-constructor (sb-int:gensymify* struct-name "-CONSTRUCTOR")))
                  ;;
                  (2-level? (if batch-size t nil))
                  ;;
                  (with-batch-macro (option :with-batch-allocation-name nil))
-                 (ll-constructor (gensym (format nil "~a-~a" :make-ll struct-name)))
-                 (var-constructor (gensym (format nil "~a-~a" :make-data-var struct-name)))
+                 (ll-constructor (sb-int:gensymify* :make-ll- struct-name))
+                 (var-constructor (sb-int:gensymify* :make-data-var- struct-name))
                  (constructor-name (option :constructor
                                            (intern (format nil "~a~a" :make- struct-name)
                                                    (symbol-package struct-name))))
                  ;;
-                 (col-struct (gensym (format nil "~a-~a" :col-struct struct-name)))
-                 (upper-struct (gensym (format nil "~a-~a" :upper-col-s struct-name)))
-                 (data-var (option :data-var (gensym (format nil "~a-~a" :data struct-name))))
+                 (col-struct (sb-int:gensymify* :col-struct "-" struct-name))
+                 (upper-struct (sb-int:gensymify* :upper-col-s- struct-name))
+                 (data-var (option :data-var (sb-int:gensymify* :data- struct-name)))
                  ;;
                  (lower-acc (gensym "LOWER")))
             (when (zerop (length slots))
@@ -614,15 +614,19 @@
                   (setf upper-struct col-struct))
                 (identity ;sb-ext:with-current-source-form (options slots)
                   `(progn
-                     ;;(deftype ,struct-name () 'sb-int:udef-inttype)
-                     (def-udef-inttype ,struct-name
-                       :id ,udef-id
-                       :max-bits ,max-bits
-                       ;; NIL gets stored in U-B columns as -1 (mod bits) values
-                       :nil-as-minus-1 t ; TODO configurable?
-                       :to-udef ,to-udef
-                       :from-udef ,from-udef)
+                     ;; Don't redefine
+                     ,(unless old-id
+                        `(def-udef-inttype ,struct-name
+                           :id ,udef-id
+                           :max-bits ,max-bits
+                           ;; NIL gets stored in U-B columns as -1 (mod bits) values
+                           :nil-as-minus-1 t ; TODO configurable?
+                           :to-udef ,to-udef
+                           :from-udef ,from-udef))
                      ;;
+                     (locally
+                       (declare (sb-ext:muffle-conditions sb-int:same-file-redefinition-warning
+                                                          sb-int:duplicate-definition))
                      ,(if 2-level?
                           `(progn
                              (defstruct (,col-struct
@@ -655,10 +659,7 @@
                                         (:conc-name nil)
                                         (:include udef-c-s-only
                                          ,@ base-defaults))
-                             ,@ actual-slots))
-                     ;;
-                     (setf (get ',struct-name 'column-struct-data)
-                           ',data-var)
+                             ,@ actual-slots)))
                      ;;
                      (declaim (type ,(if 2-level?
                                          upper-struct
@@ -669,18 +670,19 @@
                      (setf ,data-var (,var-constructor))
                      (declaim (sb-ext:always-bound ,data-var))
                      ;;
+                     (setf (get ',struct-name 'column-struct-data)
+                           ,data-var)
+                     ;;
                      #+(or)(declaim (inline ,base-constructor))
                      (defun ,base-constructor (,where ,idx ,@ e-slot-names)
                        (declare (optimize (debug 1)
                                           (speed 3)
                                           (compilation-speed 0)
                                           (safety 1))
-                                (type fixnum ,idx)
+                                (type (integer 0 (,(expt 2 max-bits))) ,idx)
                                 (type ,(if 2-level?
                                            upper-struct
                                            col-struct) ,where))
-                       ;(sb-sys:without-gcing
-                       ;(sb-sys:without-interrupts
                        ;; TODO: provide restart for reallocation
                        (locally
                          (declare (notinline column-struct-size))
@@ -692,26 +694,7 @@
                                       (column-struct-resize ,where
                                                             (max (round (* (sqrt 2) ,old-size))
                                                                  (+ ,old-size
-                                                                    ,(or batch-size 50))))))
-                               #+(or)
-                               (when ,2-level?
-                                 (princ
-                                   (format nil "~d: ~d > ~d, resized step ~d: ~d, ~d~%"
-                                           (sb-thread:thread-os-tid sb-thread:*current-thread*)
-                                           ,idx ,old-size
-                                           i
-                                           (column-struct-size ,where)
-                                           (length (funcall (csu-lower-acc ,where) ,where))
-                                           )
-                                   *trace-output*))
-                               ))
-                       #+(or)
-                       (princ
-                         (format nil "~d: ~d in batch ~d, 0x~x"
-                                 (sb-thread:thread-os-tid sb-thread:*current-thread*)
-                                 ,idx fgg
-                                 (aref (funcall (csu-lower-acc ,where) ,where) fgg))
-                         *trace-output*)
+                                                                    ,(or batch-size 50))))))))
                        ;; TODO: for a 2-level structure the macro expansion
                        ;; repeats the (FLOOR idx batch-size) for each slot -
                        ;; is that optimized away or needs to be fixed?
@@ -725,35 +708,34 @@
                             elem-counts)
                        ;; Return (doubly-)tagged UDEF-INTTYPE
                        (,to-udef ,idx))
-                          ;))
-                          ;; This arglist must be in correct order, though
-                          (defun ,constructor-name (&key ,@ constructor-arg-list)
-                            ;; Value before incrementing
-                            (let ((,idx (get-new-id-range ,data-var)))
-                              (,base-constructor ,data-var ,idx ,@ e-slot-names)))
-                          ;;
-                          ,@ decl
-                          ,@ code
-                          ;;
-                          ,(when with-batch-macro
-                             ;; Sanity check
-                             (when (not batch-size)
-                               (error "WITH-BATCHED-ALLOCATION is only available in batch mode (yet)."))
-                             (assert (> batch-size 3)) ;; TODO increase
-                             (return-batch-macro col-struct with-batch-macro
-                                                 data-var batch-size base-constructor
-                                                 constructor-arg-list e-slot-names))
-                          ',e-accessor-names ; avoid unused warning
-                          ;; BROKEN: There is no class named X.
-                          #+(or)
-                          (defmethod sb-c::describe-object :after ((obj ,struct-name) stream)
-                            ,@(loop for acc in e-accessor-names
-                                    for slot in i-slot-names
-                                    collect `(format stream "~&  ~A = ~A~%" ',slot (,acc obj))))
-                          ;;
-                          (column-struct-reset ,data-var)
-                          (column-struct-resize ,data-var ,initial-size)
-                          ',struct-name))))))))))
+                     ;; This arglist must be in correct order
+                     (defun ,constructor-name (&key ,@ constructor-arg-list)
+                       ;; Value before incrementing
+                       (let ((,idx (get-new-id-range ,data-var)))
+                         (,base-constructor ,data-var ,idx ,@ e-slot-names)))
+                     ;;
+                     ,@ decl
+                     ,@ code
+                     ;;
+                     ,(when with-batch-macro
+                        ;; Sanity check
+                        (when (not batch-size)
+                          (error "WITH-BATCHED-ALLOCATION is only available in batch mode (yet)."))
+                        (assert (> batch-size 3)) ;; TODO increase
+                        (return-batch-macro col-struct with-batch-macro
+                                            data-var batch-size base-constructor
+                                            constructor-arg-list e-slot-names))
+                     ',e-accessor-names ; avoid unused warning
+                     ;; BROKEN: There is no class named X.
+                     #+(or)
+                     (defmethod sb-c::describe-object :after ((obj ,struct-name) stream)
+                       ,@(loop for acc in e-accessor-names
+                               for slot in i-slot-names
+                               collect `(format stream "~&  ~A = ~A~%" ',slot (,acc obj))))
+                     ;;
+                     (column-struct-reset ,data-var)
+                     (column-struct-resize ,data-var ,initial-size)
+                     ',struct-name))))))))))
 
 
 (defmacro make-wrapped-udef-accessor (new old col-struct-name)
@@ -797,14 +779,8 @@
 
 
 
-;; TODO: EVAL-WHEN for forms in macro?
-
 ;; TODO: method dispatch on UDEFs - it's possible on FIXNUM etc. as well!
 ;; then fix PRINT-UGLY?
-
-;; TODO: option to allocate a NULL element,
-;; so that a slot can be a pure UNSIGNED-BYTE,
-;; but getter/setter convert NIL to/from this special value (-1?)
 
 ;; TODO: box/unbox into (unsigned-byte X) specialized arrays and slots
 ;;       (Would that need a new widetag for each udef-tag?)

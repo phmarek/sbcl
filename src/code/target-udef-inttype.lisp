@@ -78,8 +78,8 @@
 
 (declaim (inline udef-general-get-value))
 (defun udef-general-get-value (x)
-  (ash (udef-inttype-value x)
-       (- +udef-tag-bits+)))
+  (ash (sb-kernel:get-lisp-obj-address x)
+       (- (+ sb-vm:n-widetag-bits +udef-tag-bits+))))
 
 (declaim (ftype (function (T)
                           (values symbol
@@ -117,7 +117,8 @@
   (let* ((prev-def% (get name 'udef-metadata))
          (prev-def (when (udef-metadata-p prev-def%)
                         prev-def%)))
-    (values (and prev-def (udef-metadata-udef-id   prev-def))
+    (values (or (and prev-def (udef-metadata-udef-id   prev-def))
+                (get-existing-udef-id name))
             (and prev-def (udef-metadata-from-udef prev-def))
             (and prev-def (udef-metadata-to-udef   prev-def))
             (and prev-def (udef-metadata-type-p    prev-def))
@@ -159,48 +160,56 @@
                            to-udef
                            (sb-int:symbolicate :MAKE name))))
       ;; TODO: tell if old definition overrode new values?
+      (setf (get name 'udef-metadata)
+            (make-udef-metadata
+              :udef-id id
+              :to-udef  to-udef-fn
+              :from-udef from-udef-fn
+              :type-p typep-fn
+              :max-bits max-bits))
+         ;;
       `(progn
          (eval-when (:compile-toplevel :load-toplevel :execute)
-           (deftype ,name () 'sb-int:udef-inttype))
-         ;;
-         ;; TODO: box/unbox
-         (declaim (inline ,typep-fn)
-                  (ftype (function (T) (member t nil)) ,typep-fn))
-         (declaim (inline ,from-udef-fn)
-                  (ftype (function ( (or ,name
-                                         ,@ (when nil-as-minus-1
-                                              `(null))) )
-                                   (values (unsigned-byte ,max-bits)))
+           (deftype ,name () 'sb-int:udef-inttype)
+           ;;
+           ;; TODO: box/unbox
+           (declaim (inline ,typep-fn)
+                    (ftype (function (T) (member t nil)) ,typep-fn))
+           ;; From UDEF to integer
+           (declaim (inline ,from-udef-fn)
+                    (ftype (function (,name &optional (member t nil))
+                                     (values (or (integer 0 ,mask)
+                                                 ,@(when nil-as-minus-1
+                                                      `(null)) )))
                          ,from-udef-fn))
-         (declaim (inline ,to-udef-fn)
-                  (ftype (function ( (or (unsigned-byte ,max-bits)
-                                         ,@ (when nil-as-minus-1
-                                              `(null))) )
-                                   ,name)
-                         ,to-udef-fn))
-         (defun ,typep-fn (x)
-           (= ,id (udef-inttype-tag x)))
-         (defun ,to-udef-fn (x)
-           (make-udef-inttype (logior ,id
-                                      (ash (if (and ,(and nil-as-minus-1 t)
-                                                    (eq x nil))
-                                               ,mask
-                                               x)
-                                           +udef-tag-bits+))))
-         (defun ,from-udef-fn (x)
-           (let ((num (udef-general-get-value x)))
-             (if (and ,(and nil-as-minus-1 t)
-                      (= num ,mask))
-                 nil
-                 num)))
-         ;;
-         (setf (get ',name 'udef-metadata)
-               (make-udef-metadata
-                 :udef-id ,id
-                 :to-udef  ',to-udef-fn
-                 :from-udef ',from-udef-fn
-                 :type-p ',typep-fn
-                 :max-bits ,max-bits))
+           ;; From integer to UDEF
+           (declaim (inline ,to-udef-fn)
+                    (ftype (function ( ,(if nil-as-minus-1
+                                            `(or (integer 0 (,mask))
+                                                 null)
+                                            `(integer 0 ,mask)) )
+                                     ,name)
+                           ,to-udef-fn))
+           (defun ,typep-fn (x)
+             (= ,id (udef-inttype-tag x)))
+           (defun ,to-udef-fn (x)
+             (declare (optimize (speed 3) (debug 0) (safety 1)))
+             (make-udef-inttype (logior ,id
+                                        (ash (if (and ,(and nil-as-minus-1 t)
+                                                      (eq x nil))
+                                                 ,mask
+                                                 x)
+                                             +udef-tag-bits+))))
+           ;; When writing integers into specialized arrays,
+           ;; we need the -1 representation.
+           (defun ,from-udef-fn (x &optional nil-to-minus-1)
+             (declare (optimize (speed 3) (debug 0) (safety 1)))
+             (let ((num (udef-general-get-value x)))
+               (if (and ,(and nil-as-minus-1 t)
+                        (not nil-to-minus-1)
+                        (= num ,mask))
+                   nil
+                   num))))
          ;;
          ',name))))
 
