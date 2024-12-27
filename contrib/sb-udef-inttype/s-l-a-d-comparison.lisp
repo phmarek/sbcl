@@ -11,13 +11,13 @@
                              'my-integers)
                              ;; Sized up a few times, reaches *max* more or less exactly.
                             ((string= what "2")
-                             '(my-integers (:initial-size 16500)
+                             '(my-integers (:initial-size 165000)
                                            (:data-var var)))
                             ((string= what "3")
                               '(my-integers (:initial-size 2030000)
                                             (:data-var var)))
                             ((string= what "4")
-                              '(my-integers (:initial-size 3000000)
+                              '(my-integers (:initial-size 7000000)
                                             (:batched 1000001)
                                             (:data-var var))))))
 
@@ -89,6 +89,9 @@
             (sb-udef-inttype:column-struct-size 'my-integers))))
 
 (check)
+;; Breaks currently because of 60M CONS cells??? UDEF_MAX 13M works.
+;(sb-ext:gc :full t)
+;(room nil)
 
 (let ((file (third sb-ext:*posix-argv*)))
   (unless (member file '(nil "" "-") :test #'equal)

@@ -1,49 +1,44 @@
 ;;; Define a column-structure.
 ;;
-;; The slot definitions passed in are used in a DEFCLASS
-;; whose slots contain vectors;
-;; the structure name is used to create a UDEF-INTTYPE,
-;; so that other structures can reference instances here.
+;; The structure name is used to create a UDEF-INTTYPE,
+;; the slot definitions are used to create accessor
+;; functions similar to DEFSTRUCT.
+;; Data is stored in vectors per slot, so the number of Lisp objects
+;; is much smaller than with DEFSTRUCT.
+;; Referencing such "instances" is done via the (typed!) UDEF.
 ;;
 ;; You can either create one set of (large) vectors,
 ;; which will mean some load when resizing
 ;; (and concurrent modification while resizing will lose changes!);
-;; or a 2-level structure, where one vector just stores class instances
-;; with (fixed-size) vectors for the data.
-;; In the latter case allocating more data means just adding to the first vector,
+;; or a 2-level structure, where the CONTENT-VECTOR
+;; stores ("heap"-)vectors to slot-vectors ;)
+;; In the latter case allocating more data means just modifying
+;; the "heap"-vectors addressed by CONTENT-VECTOR,
 ;; so that should be multithreading-safe.
 
 
 ;; Simple case:
-;;     ┌global-var─────┐
-;;     │ udef          │
-;;     │ mfill-pointer │
-;;     │ ...           │
-;;     │ #:slot0       ├─────────────>┌vect0┐
-;;     │ #:slot1       ├────>┌vect1┐  │v-0-0│
-;;     └───────────────┘     │v-0-1│  │v-1-0│
-;;                           │v-1-1│  │v-2-0│
-;;                           │v-2-1│  │     │
-;;                           │     │  └─────┘
-;;                           └─────┘
 ;;
-;; 2-level-case:
+;;   ┌slots┐
+;;   │  0  │──────────────>┌─slot-a─┐
+;;   │  1  │──>┌─slot-b─┐  │  a[0]  │
+;;   │ ... │   │  b[0]  │  │  a[1]  │
+;;   └─────┘   │  b[1]  │  │  ...   │
+;;             │  ...   │  │ a[n-1] │
+;;             │ b[n-1] │  └────────┘
+;;             └────────┘
 ;;
-;;     ┌───────────────┐<──────┐
-;;     │ udef          │       │     ┌───────────────┐  ┌vect0┐
-;;     │ elem-counts   │       └─────┤ upper         │  │v-0-0│
-;;     │ mfill-pointer │             │ batch-index   │  │v-1-0│
-;;     │ ...           │             │ lfill-pointer │  │v-2-0│
-;;     │ #:lower       ├─>┌batches┐  │ #:slot-0      ├─>└─────┘
-;;     └───────────────┘  │ 0     ├─>│ #:slot-1      ├─>┌vect1┐
-;;                        │ 1     ├┐ │               │  │v-0-1│
-;;                        │       ││ └───────────────┘  │v-1-1│
-;;                        │       │└──>└─────────────┘  │v-2-1│
-;;                        └───────┘                     └─────┘
+;; 2-level:
+;;   ┌slots┐
+;;   │  0  │──>┌──batch──┐
+;;   │  1  │   │ [ 0- n] │─>┌─slot-a─┐
+;;   │ ... │   │ [ n-2n] │  │  a[0]  │
+;;   └─────┘   │ [2n-3n] │  │  a[1]  │
+;;             │ [ ... ] │  │  ...   │
+;;             └─────────┘  │ a[n-1] │
+;;                          └────────┘
 ;;
-;;
-;; The structures being used are defined freshly,
-;; so that the slot and vector types are as narrow as possible.
+;; The vector types are as narrow as possible.
 ;; This way memory usage is reduced (eg with (UNSIGNED-BYTE 16)).
 
 ;; The biggest advantage of that scheme is that with specialized slots
@@ -86,287 +81,201 @@
 (defun default-batch-size (guess)
   (expt 2 (ceiling (log guess 2) 4/3)))
 
-;; for ATOMIC-INCF to work, these must be structures.
+;; for ATOMIC-INCF to work, this must be a structure.
 ;; The slot names (rather their initargs) might collide with ones our users choose, sadly...
 (defstruct (udef-c-s-metadata
-             (:conc-name c-s-)
-             (:include udef-metadata))
-  (udef         nil :type symbol     :read-only t)
-  (e-slot-names nil :type list       :read-only t)
-  (i-slot-names nil :type list       :read-only t)
-  (e-acc-fn     nil :type list       :read-only t)
-  (elem-counts  nil :type list       :read-only t)
-  (slot-acc-fn  nil :type list       :read-only t)
-  (mfill-pointer  0 :type sb-vm:word)
-  (batch-size   nil :type (or null
-                              (integer 1 1000000000))
-                :read-only t))
+             (:conc-name cs-meta-)
+             ;(:include udef-metadata)
+             )
+  (udef            nil :type symbol     :read-only t)
+  (data-var        nil :type symbol     :read-only t)
+  (next              0 :type sb-vm:word)
+  (allocated         0 :type sb-vm:word)
+  (as-alist        nil :type symbol     :read-only t)
+  (batch-size      nil :type (or null
+                                 (integer 1 1000000000))
+                       :read-only t)
+  (lock            (sb-thread:make-mutex :name "c-s-upper-lock")
+                       :type sb-thread:mutex
+                       :read-only t)
+  (slot-defs       nil :type vector     :read-only t)
+  (slots-vec-sym   nil :type symbol :read-only t))
 
-(defstruct (udef-c-s-lower
-             (:conc-name csl-))
-  ;; TODO: circular definition
-  (upper         nil :type T #+(or)udef-c-s-upper     :read-only t)
-  (batch-index     0 :type fixnum)
-  (lfill-pointer   0 :type sb-vm:word))
+(defstruct (udef-c-s-slot
+             (:type list) ; easier to serialize in macro expansion
+             (:conc-name cs-slot-))
+  ;; must be first slot!!
+  (evaled-init   nil :type t                               :read-only t)
+  (index         0   :type fixnum                          :read-only t)
+  (slot-name     nil :type symbol                          :read-only t)
+  (accessor-sym  nil :type symbol                          :read-only t)
+  ;; User-supplied data
+  (orig-type     nil :type t                               :read-only t)
+  (initarg       nil :type t                               :read-only t)
+  ;; Internally derived
+  (trslt-type    nil :type t                               :read-only t)
+  ;; vectors can be serialized
+  (array-dim?    nil :type (or null sb-int:index)          :read-only t)
+  (array-el-type nil :type t                               :read-only t)
+  (udef          nil :type symbol                          :read-only t)
+  (form          nil :type list                            :read-only t))
 
-(defstruct (udef-c-s-upper
-             (:include udef-c-s-metadata)
-             (:conc-name csu-))
-  (lock (sb-thread:make-mutex :name "c-s-upper-lock")
-        :type sb-thread:mutex
-        :read-only t)
-  ;; As the derived specific structures get created with :CONC-NAME NIL,
-  ;; we cannot use a common symbol like LOWER for the slot name --
-  ;; the accessors would conflict with each other.
-  ;; And :INCLUDE doesn't allow overriding the type
-  ;; (which differs)...
-  (lower-acc nil :type function)
-  (set-lower-acc nil :type function)
-  (make-lower nil :type function)
-  ;; lower vector slot added dynamically because of dynamic type --
-  ;; must be a GENSYM so that there's no conflict for multiple
-  ;; DEF-COLUMN-STRUCTs.
-  )
 
-(defstruct (udef-c-s-only
-             (:include udef-c-s-metadata)
-             (:conc-name cso-))
-  ;; Other slots added dynamically
-  )
+(defun cs-slot-is-nullable-udef? (slot)
+  "Returns the UDEF structure or NIL."
+  ;; TODO store & check nil-as-minus-1?
+  (when (cs-slot-udef slot)
+    (nth-value 1
+               (get-udef-metadata-from-symbol
+                 (cs-slot-orig-type slot)))))
 
 (defun get-udef-metadata-from-symbol (sym &optional c-s-req)
   (when (symbolp sym)
-    (let ((v-c-s (get sym 'column-struct-data)))
+    (let ((v-c-s (get sym 'column-struct-data))
+          (udef  (get sym 'udef-metadata)))
       (when (and c-s-req
                  (not v-c-s))
         (error "~s is not a column-structure type." sym))
-      (let ((v (or v-c-s
-                   (get sym 'udef-metadata))))
-        (when v
-          (etypecase v
-            (symbol (symbol-value v))
-            (udef-metadata v)))))))
-
-(defun get-upper-last-batch (obj)
-  (let* ((lower (funcall (csu-lower-acc obj) obj))
-         (last-batch-nr (1- (length lower))))
-    (aref lower last-batch-nr)))
+      (values v-c-s
+              udef))))
 
 ;(declaim (inline get-new-id-range))
 (defun get-new-id-range (obj &optional (count 1))
-  (cond
-    ((typep obj 'udef-c-s-only)
-     (sb-ext:atomic-incf (c-s-mfill-pointer obj)
-                         count))
-    ((typep obj 'udef-c-s-upper)
-     (sb-ext:atomic-incf (c-s-mfill-pointer obj)
-                         count))
-    ((typep obj 'udef-c-s-lower)
-     (sb-ext:atomic-incf (csl-lfill-pointer obj)
-                         count))
-    (t
-     (error "Bad type for ~s" obj))))
+  (sb-ext:atomic-incf (cs-meta-next obj)
+                      count))
 
 (defun column-struct-reset (obj)
   "Soft-resets OBJ, ie. sets the last used index to 0."
-  (cond
-    ((symbolp obj)
-     (let ((data (get-udef-metadata-from-symbol obj t)))
-       (column-struct-reset data)))
-    ((typep obj 'udef-c-s-only)
-     (setf (c-s-mfill-pointer obj) 0))
-    ((typep obj 'udef-c-s-lower)
-     (setf (csl-lfill-pointer obj) 0))
-    ((typep obj 'udef-c-s-upper)
-     (setf (c-s-mfill-pointer obj) 0)
-     (map 'nil #'column-struct-reset
-          (funcall (csu-lower-acc obj) obj)))
-    (t
-     (error "Bad type for ~s" obj))))
+  (if (symbolp obj)
+      (column-struct-reset
+        (get-udef-metadata-from-symbol obj t))
+      (setf (cs-meta-next obj)
+            0)))
 
 (declaim (ftype (function (t) (sb-int:index)) column-struct-size))
 (defun column-struct-size (obj)
   "Returns the allocated length (not the number of elements used)"
-  (cond
-    ((symbolp obj)
-     (let ((data (get-udef-metadata-from-symbol obj t)))
-       (column-struct-size data)))
-    ((typep obj 'udef-c-s-only)
-     (array-dimension (slot-value obj
-                                  (first
-                                    (cso-i-slot-names obj)))
-                      0))
-    ((typep obj 'udef-c-s-upper)
-     (* (length (funcall (csu-lower-acc obj) obj))
-        (csu-batch-size obj)))
-    (t
-     (error "Bad type for ~s" obj))))
+  (if (symbolp obj)
+      (column-struct-size
+        (get-udef-metadata-from-symbol obj t))
+      (cs-meta-allocated obj)))
 
 
 (defun column-struct-last-index (obj)
   "Returns the last used index;
   doesn't care about fragmentation with batched allocation."
-  (cond
-    ((symbolp obj)
-     (let ((data (get-udef-metadata-from-symbol obj t)))
-       (column-struct-last-index data)))
-    ((typep obj 'udef-c-s-only)
-     (c-s-mfill-pointer obj))
-    ((typep obj 'udef-c-s-upper)
-     (c-s-mfill-pointer obj))
-    #+(or)
-    ((typep obj 'udef-c-s-lower)
-     (let* ((last-batch (get-upper-last-batch obj)))
-       (+ (* (csl-batch-index last-batch)
-             (csu-batch-size obj))
-          (csl-mfill-pointer last-batch))))
-    (t
-     (error "Bad type for ~s" obj))))
+  (if (symbolp obj)
+      (column-struct-last-index
+        (get-udef-metadata-from-symbol obj t))
+      (cs-meta-next obj)))
 
 
 (defun column-struct-get-struct (obj &key (output :alist))
   "Returns the data of OBJ as an alist."
+  (declare (ignore output))
   (multiple-value-bind (type idx) (udef-inttype-type-of obj)
     ;; Optimizations possible
     (declare (ignore idx))
     (assert type)
-    (let* ((udef (get-udef-metadata-from-symbol type t)))
-      (loop for name in (c-s-e-slot-names udef)
-            for acc-fn in (c-s-e-acc-fn udef)
-            if (eq output :alist)
-            ;; TODO: keywords or the actual slot symbols?
-            collect (cons name (funcall acc-fn obj))))))
+    (let ((c-s (get-udef-metadata-from-symbol type)))
+      (funcall (cs-meta-as-alist c-s)
+               obj))))
 
-(defun column-struct-resize (obj new-size &key force-smaller)
+(defun reduce-element-counts (vec new)
+  (loop for slot across vec
+        for i upfrom 0
+        do (setf (aref vec i)
+                 (adjust-array slot (list new)
+                               :element-type (array-element-type slot)))))
+
+(defun column-struct-resize (c-s new-size &key force-smaller)
   "Resizes to (at least) NEW-SIZE.
-  Might do concurrency-unsafe ADJUST-ARRAY calls for a single-level column-struct,
-  or just add new batches for a two-level column-struct."
-  (cond
-    ((symbolp obj)
-     (let ((data (get-udef-metadata-from-symbol obj t)))
-       (column-struct-resize (symbol-value data) new-size
-                             :force-smaller force-smaller)))
-    ;;
-    ((typep obj 'udef-c-s-only)
-     ;; unsafe resize, other threads might change elements
-     ;; TODO: add restart to reset or keep them if more indizes are actually used?
-     (when (or force-smaller
-               (> new-size (column-struct-size obj)))
-       (dolist (slot (cso-i-slot-names obj))
-         (let ((old (slot-value obj slot)))
-           (setf (slot-value obj slot)
-                 (adjust-array old new-size
-                               ;;:initial-element ??
-                               :element-type (array-element-type old)))))))
-    ;;
-    ((typep obj 'udef-c-s-upper)
-     (sb-thread:with-mutex ((csu-lock obj))
-       ;; Get data only after acquiring the lock!
-       (let* ((batches-wanted (ceiling new-size (c-s-batch-size obj)))
-              (old (funcall (csu-lower-acc obj) obj)))
-         (cond
-           ;; Decrease size
-           ((and force-smaller
-                 (> (array-dimension old 0)
-                    batches-wanted))
-                       #+(or)
-            (format *trace-output* "~d: shrinking from ~d to ~d batches~%"
-                    (sb-thread:thread-os-tid sb-thread:*current-thread*)
-                    (array-dimension old 0)
-                    batches-wanted)
-            (setf (fill-pointer old) batches-wanted)
-            (sb-vm:%write-barrier)
-            (funcall (csu-set-lower-acc obj)
-                     (adjust-array old batches-wanted
-                                   :fill-pointer batches-wanted
-                                   :element-type (array-element-type old))
-                     obj))
-           ;; Increase size.
-           ;; VECTOR-PUSH-EXTEND isn't safe against concurrent readers.
-           ((< (array-dimension old 0)
-               batches-wanted)
-            (let ((new-vec (make-array batches-wanted
-                                       :fill-pointer 0
-                                       :element-type (array-element-type old)))
-                  (old-cnt (fill-pointer old)))
-              ;; Say we're about to write elements
-              (setf (fill-pointer new-vec)
-                    batches-wanted)
-              (replace new-vec old :end1 old-cnt)
-              (loop for i from old-cnt below batches-wanted
-                    for c-s = (funcall (csu-make-lower obj) i)
-                       #+(or)
-                    do
-                       #+(or)
-                    (princ
-                         (format nil "~d: resize from ~d to ~d: add ~d at 0x~x~%"
-                               (sb-thread:thread-os-tid sb-thread:*current-thread*)
-                               old-cnt batches-wanted i
-                               (sb-kernel:get-lisp-obj-address c-s))
-                         *trace-output*)
-                    do (setf (aref new-vec i) c-s))
-              ;; Ensure visibility order
-              (sb-vm:%write-barrier)
-              ;; Write vector
-              (funcall (csu-set-lower-acc obj)
-                       new-vec
-                       obj)))
-           ;; Just use existing index.
-           ((< (fill-pointer old)
-               batches-wanted)
-                  (format *trace-output* "~d: upgrade ~d to ~d~%"
-                             (sb-thread:thread-os-tid sb-thread:*current-thread*)
-                             (fill-pointer old) batches-wanted)
-            (loop for i from (fill-pointer old) below batches-wanted
-                  for c-s = (funcall (csu-make-lower obj) i)
-                       #+(or)
-                  do
-                       #+(or)
-                  (format *trace-output* "~d: reserve ~d~%"
-                             (sb-thread:thread-os-tid sb-thread:*current-thread*) i)
-                  do (setf (aref old i) c-s))
-            #+(or)
-            (sb-vm:%write-barrier)
-            (setf (fill-pointer old)
-                  batches-wanted))))))
-    ;;
-    (t
-     (error "Bad type for ~s" obj)))
-  #+(or)
-  (format *trace-output* "~d: resized to ~d~&"
-          (sb-thread:thread-os-tid sb-thread:*current-thread*)
-          (column-struct-size obj))
-  (column-struct-size obj))
+  Calls concurrency-unsafe ADJUST-ARRAY for a single-level column-struct,
+  or adds/removes batches for a two-level column-struct."
+  (sb-thread:with-mutex ((cs-meta-lock c-s))
+    (cond
+      ((< new-size (cs-meta-allocated c-s))
+       ;; reduce size
+       (when force-smaller
+         ;; but only when forced to!
+         (let ((new-count (if (cs-meta-batch-size c-s)
+                              ;; Set number of batches (rounded up).
+                              (ceiling new-size (cs-meta-batch-size c-s))
+                              ;; or just length of slot vectors.
+                              new-size)))
+           (setf (cs-meta-allocated c-s)
+                 new-size)
+           (sb-vm:%write-barrier)
+           (reduce-element-counts (symbol-value (cs-meta-slots-vec-sym c-s))
+                                  new-count))))
+      ((= new-size (cs-meta-allocated c-s))
+       ;; nothing to do after acquiring mutex
+       t)
+      (t
+      ;; enlarge.
+       (let* ((2-level? (cs-meta-batch-size c-s))
+              (new-vec-size (if 2-level?
+                                (ceiling new-size (cs-meta-batch-size c-s))
+                                new-size)))
+         ;(format t "--------------------- for ~d~%" new-vec-size)
+         ;(room t)
+         (loop for slot-def across (cs-meta-slot-defs c-s)
+               for slot-vec across (symbol-value (cs-meta-slots-vec-sym c-s))
+               for slot-nr = (cs-slot-index slot-def)
+               for orig-type = (cs-slot-orig-type slot-def)
+               for slot-type = (or (cs-slot-trslt-type slot-def)
+                                   (cs-slot-array-el-type slot-def)
+                                   orig-type
+                                   (error "No type"))
+               for elem-per-slot = (or (cs-slot-array-dim? slot-def)
+                                       1)
+               for init-val = (cs-slot-evaled-init slot-def)
+               for new-elements = (- new-vec-size (array-dimension slot-vec 0))
+               ;do (format t "resize ~s: got ~s, ~s~%"
+               ;           (cs-slot-slot-name slot-def)
+               ;           (cs-slot-trslt-type slot-def)
+               ;           slot-type)
+               do (setf (aref (symbol-value (cs-meta-slots-vec-sym c-s))
+                              slot-nr)
+                        (if 2-level?
+                            ;; create a number of batches
+                            (let* ((new (loop repeat new-elements
+                                              collect (make-array (* elem-per-slot
+                                                                     (cs-meta-batch-size c-s))
+                                                                  :element-type slot-type
+                                                                  :adjustable nil
+                                                                  :fill-pointer nil
+                                                                  :displaced-to nil
+                                                                  :initial-element init-val
+                                                                  )))
+                                   (data (concatenate 'list slot-vec new)))
+                              (make-array new-vec-size
+                                          :element-type (array-element-type slot-vec)
+                                          :initial-contents data))
+                            (let* ((new (make-list (* elem-per-slot new-elements)
+                                                   :initial-element init-val
+                                                   ))
+                                   (data (concatenate 'list slot-vec new)))
+                              (make-array (* elem-per-slot
+                                             new-vec-size)
+                                          :element-type slot-type
+                                          :initial-contents data)))))
+         (sb-vm:%write-barrier)
+         (setf (cs-meta-allocated c-s)
+               new-size)))))
+  (column-struct-size c-s))
 
 (defun column-struct-clear (obj &key new-initial-size)
   "Hard-resets OBJ, ie. drops storage vectors."
-  (column-struct-reset obj)
-  (column-struct-resize obj 0 :force-smaller t)
-  (when new-initial-size
-    (column-struct-resize obj new-initial-size))
-  new-initial-size)
-
-(defun c-s-value% (2-level? data-var accessor idx elem-count lower-acc &optional (before 'identity) after)
-  (flet ((aref-or-subseq (form idx)
-           (if (= 1 elem-count)
-               `(,before (aref ,form ,idx)
-                         ,@ after)
-               (sb-int:with-unique-names (idx2)
-                 `(let ((,idx2 (* ,idx ,elem-count)))
-                    (,before
-                       (subseq ,form ,idx2 (+ ,idx2 ,elem-count))
-                       ,@ after))))))
-    (if 2-level?
-        (sb-int:with-unique-names (batch i lower)
-          `(multiple-value-bind (,batch ,i) (floor ,idx (c-s-batch-size ,data-var))
-             (let ((,lower (,lower-acc ,data-var)))
-               #+(or)
-               (unless (< ,batch (length ,lower 0))
-                 (error "Data ~s out of bounds" ,idx))
-               ,(aref-or-subseq `(,accessor (aref ,lower ,batch))
-                                i))))
-        (aref-or-subseq `(,accessor ,data-var)
-                        idx))))
+  (if (symbolp obj)
+      (column-struct-reset
+        (get-udef-metadata-from-symbol obj t))
+      (progn
+        (column-struct-reset obj)
+        (column-struct-resize obj 0 :force-smaller t)
+        (when new-initial-size
+          (column-struct-resize obj new-initial-size))
+        new-initial-size)))
 
 
 (defun return-batch-macro (col-struct macro-name data-var batched
@@ -398,126 +307,212 @@
               (locally
                 ,@ body)))))))
 
+(defun parse-slot (input)
+  (declare (sb-ext:muffle-conditions style-warning))
+  (destructuring-bind (name &optional init &key (type t))
+      (sb-int:ensure-list input)
+    (values name init type)))
 
-(defun array-type-destructure (type% init)
-  "Returns vector type, slot type, argument type, element count,
-  init form, single init value,
-  and whether a conversion from/to UNSIGNED-BYTE should happen"
-  (if (and (consp type%)
-           (member (first type%) '(array vector simple-vector))
-           (numberp (third type%)))
-      (destructuring-bind (kind entry-type dimensions) type%
-        (let ((dim-list (sb-int:ensure-list dimensions)))
-          (list entry-type
-                type%
-                (list kind
-                      entry-type
-                      ;; TODO: dimension determining broken, currently only 1 dimension supported
-                      '(*)
-                      #+(or)
-                      ;;   Definition's declared type for variable NEW-VAL:
-                      ;;     (ARRAY (UNSIGNED-BYTE 32) (* * *))
-                      (if (numberp dimensions)
-                          dim-list
-                          dimensions))
-                (apply #'* dim-list)
-                `(make-array (list ,@dim-list)
-                             :initial-element ,init
-                             :element-type ',entry-type)
-                init
-                nil nil)))
-     (let* ((meta (get-udef-metadata-from-symbol type%))
-            (type (if meta
-                      ;; Is a slot containing a UDEF,
-                      ;; so use (UNSIGNED-BYTE x) instead
-                      `(unsigned-byte ,(udef-metadata-max-bits meta))
-                      type%))
-            (init2 (if meta
-                       `(,(udef-metadata-from-udef meta) ,init t)
-                       init)))
-       (list type type type%
-             1
-             init2
-             init2
-             (and meta (udef-metadata-from-udef meta))
-             (and meta (udef-metadata-to-udef  meta))))))
+(defun is-simple-1dim-array (type)
+  (ignore-errors
+    ;; restricted to a subset of possible array-types
+    (destructuring-bind (kind element-type (dimension)) type
+      (when (and (member kind '(array simple-array))
+                 (numberp dimension))
+        (multiple-value-bind (c-s element-udef)
+            (get-udef-metadata-from-symbol element-type)
+          (declare (ignore c-s))
+          (list element-type
+                dimension
+                element-udef))))))
 
-(defun handle-c-s-slots (struct-name 2-level?
-                                     batch-size data-var initial-size
-                                     from-udef lower-acc
-                                     slots)
+(defun get-slot-def (struct-name index input)
+  (multiple-value-bind (name init user-type) (parse-slot input)
+    (multiple-value-bind (c-s meta) (get-udef-metadata-from-symbol user-type)
+      (declare (ignore c-s))
+      (destructuring-bind (&optional arr-element-type arr-len arr-udef)
+          (is-simple-1dim-array user-type)
+        (declare (ignore arr-udef))
+        (make-udef-c-s-slot
+          :index index
+          :slot-name name
+          :initarg init
+          :form input
+          :orig-type user-type
+          ;; Must be evaluated
+          :evaled-init  `(let ((init ,init))
+                           ,(if meta
+                                `(sb-ext:with-current-source-form (',input)
+                                   ;; use minus-1 value instead
+                                   (funcall (udef-metadata-store-udef
+                                              (nth-value 1 (get-udef-metadata-from-symbol ',user-type)))
+                                            init))
+                                'init))
+          ;;
+          :accessor-sym (sb-int:symbolicate struct-name "-" name)
+          ;; TODO: array of UDEF, (or meta arr-udef)
+          :udef (if meta t)
+          :trslt-type (when meta
+                          ;; Is a slot containing a UDEF,
+                          ;; so use (UNSIGNED-BYTE x) instead
+                        `(unsigned-byte ,(udef-metadata-max-bits meta)))
+          :array-dim? arr-len
+          :array-el-type arr-element-type
+          )))))
+
+(defun handle-c-s-slots (struct-name slot-input)
   ;; This ensures that we get #:SLOT-1, #:SLOT-2, for each column-structure,
   ;; so doesn't pollute the keyword package for the initargs as much
   ;; both &optional and &key
-  (let* ((normalized-slots (locally
-                             (declare (sb-ext:muffle-conditions style-warning))
-                             (mapcar
-                               (lambda (x)
-                                 (destructuring-bind (n &optional i &key (type t))
-                                     (sb-int:ensure-list x)
-                                   (list n i type)))
-                               slots)))
-         (i-slot-names (let ((*gensym-counter* 1))
-                         (loop for (name . rest) in normalized-slots
-                               collect (gensym (symbol-name name))
-                               #+(or)(gensym "SLOT-")
-                               ))))
-    (loop for (ext-name init% type%) in normalized-slots
-          ;; TODO: :CONC-NAME behaviour
-          for e-accessor = (sb-int:symbolicate struct-name "-" ext-name)
-          ;; To avoid collisions, we generate own internal slot names.
-          ;; This also reduces pollution in the keyword package by having
-          ;; always the same sequential names -- and inheriting COLUMN-STRUCTs
-          ;; isn't possible (yet) anyhow.
-          ;; At least that's the idea -- doesn't seem to work as expected:
-          ;;   #<SB-KERNEL:DEFSTRUCT-DESCRIPTION #:COL-STRUCT-BAR648 {1003B67F33}>
-          ;;   '((:SLOT T . 0) (:SLOT T . 1) (:SLOT WORD . 2) (:SLOT T . 3)
-          ;;     (:SLOT T . 4) (:SLOT T . 5) (:SLOT T . 6) (:SLOT T . 7))
-          for i-name in i-slot-names
-          for (type slot-type atype elem-count init single-init ub-reader ub-maker)
-              = (array-type-destructure type% init%)
-          collect elem-count into elem-counts
-          collect ext-name into e-slot-names
-          collect `(,i-name
-                     (make-array (list (* ,elem-count ,(or batch-size initial-size)))
-                                 :initial-element ,single-init
-                                 :element-type ',type)
-                     :type (simple-array ,type (,(if batch-size
-                                                     (* elem-count batch-size)
-                                                     '*))))
-          into actual-slots
-          collect `(,ext-name ,init) into constructor-arg-list
-          collect e-accessor into e-accessor-names
-          ;;
-          collect `(declaim (ftype (function (,struct-name) ,atype) ,e-accessor)
-                            #+(or)(inline ,e-accessor))
-          into decl
-          collect `(defun ,e-accessor (id)
-                       ;; TODO: check-type
-                       (declare (optimize (speed 3) (safety 1) (debug 1))
-                                (type ,struct-name id))
-                       (let ((idx (,from-udef id)))
-                         (,(or ub-maker 'identity)
-                           ,(c-s-value% 2-level? data-var i-name 'idx elem-count lower-acc))))
-          into code
-          collect `(declaim (ftype (function (,atype ,struct-name) ,atype) (setf ,e-accessor))
-                            #+(or)(inline (setf ,e-accessor)))
-          into decl
-          collect `(defun (setf ,e-accessor) (new-val id)
-                     ;; TODO: check-type
-                     (declare (optimize (speed 3) (safety 1) (debug 1))
-                              (type ,struct-name id)
-                              (type ,atype new-val))
-                     (let ((idx (,from-udef id))
-                           (new (,(or ub-reader 'identity)
-                                  new-val)))
-                       ,(c-s-value% 2-level? data-var i-name 'idx elem-count lower-acc
-                                    'setf '(new)))
-                     new-val)
-          into code
-          finally (return (values i-slot-names e-slot-names elem-counts
-                                  e-accessor-names actual-slots
-                                  constructor-arg-list code decl)))))
+  (loop with new-val = (gensym "NEW-VAL")
+        for s-i in slot-input
+        for i upfrom 0
+        for slot = (get-slot-def struct-name i s-i)
+        for slot-type-nullable = (if (cs-slot-is-nullable-udef? slot)
+                                     `(or null ,(cs-slot-orig-type slot))
+                                     (cs-slot-orig-type slot))
+        for slot-name = (cs-slot-slot-name slot)
+        for acc = (cs-slot-accessor-sym slot)
+        ;;
+        collect slot into slots
+        collect (sb-int:gensymify* slot-name :-INIT) into tmp-names
+        ;;
+        ;; This initarg is user-visible, use supplied value
+        collect (list slot-name
+                      (cs-slot-initarg slot)) into maker-args
+        collect `(check-type ,slot-name
+                             ,slot-type-nullable) into maker-checks
+        ;;
+        collect `(ftype (function (,struct-name) (values ,slot-type-nullable)) ,acc)
+        into decl
+        ; (inline ,e-accessor)
+        collect `(defun ,acc (id)
+                   ;; TODO: check-type
+                   (declare (optimize (speed 3) (safety 1) (debug 1))
+                            (type ,struct-name id))
+                   (with-c-s-slots (,struct-name id) (,slot-name)
+                     ;; Without the VALUES we get
+                     ;;   note: Type assertion too complex to check efficiently:
+                     ;;     (VALUES SB-INT:UDEF-INTTYPE &REST T).
+                     ;;   It allows an unknown number of values, consider using
+                     ;;     (VALUES SB-INT:UDEF-INTTYPE &OPTIONAL).
+                     (values ,slot-name)))
+        into code
+        collect `(ftype (function (,slot-type-nullable ,struct-name) ,slot-type-nullable)
+                        (setf ,acc))
+        ;#+(or)(inline (setf ,e-accessor))
+        into decl
+        collect `(defun (setf ,acc) (,new-val id)
+                   ;; TODO: check-type
+                   (declare (optimize (speed 3) (safety 1) (debug 1))
+                            (type ,struct-name id)
+                            (type ,slot-type-nullable ,new-val))
+                   (with-c-s-slots (,struct-name id) (,slot-name)
+                     (values (setf ,slot-name ,new-val))))
+        into code
+        finally (return (values slots
+                                code decl
+                                maker-args maker-checks
+                                tmp-names))))
+
+
+(declaim (inline ref-udef-vec
+                 (setf ref-udef-vec)))
+
+(defun ref-udef-vec (vec index to-vec-repr from-vec-repr)
+  (declare (ignore to-vec-repr))
+  (funcall from-vec-repr
+           (aref vec index)))
+
+(defun (setf ref-udef-vec) (new vec index to-vec-repr from-vec-repr)
+  (declare (ignore from-vec-repr))
+  (setf (aref vec index)
+        (funcall to-vec-repr new))
+  new)
+
+;; Hook into CL:WITH-SLOTS?
+;; sb-mop:slot-value-using-class?
+(defmacro with-c-s-slots ((udef-name index) names &body body)
+  "Installs symbol-macros that access NAMES from UDEF-NAME
+  at INDEX (which can resp. should be a UDEF).
+  NAMES can be a list of slot names or a list of (SYM SLOT)."
+  (multiple-value-bind (c-s def) (get-udef-metadata-from-symbol udef-name t)
+    (sb-int:with-unique-names (val iidx idx batch)
+      (loop for entry in names
+            for e-list = (sb-int:ensure-list entry)
+            for var-name = (first e-list)
+            for slot-name = (or (second e-list) var-name)
+            for slot-def = (or (find slot-name
+                                       (cs-meta-slot-defs c-s)
+                                       :test #'eq
+                                       :key #'cs-slot-slot-name)
+                               (error "Invalid slot name ~s" slot-name))
+            for slot-vec-name = (sb-int:gensymify* udef-name :- var-name :-vec)
+            for data-vec = (sb-int:gensymify* udef-name :- var-name :-data-vec)
+            for slot-type = (cs-slot-orig-type slot-def)
+            for stores-udef-ub = (cs-slot-trslt-type slot-def)
+            for arr-el-type = (cs-slot-array-el-type slot-def)
+            for elem-count = (cs-slot-array-dim? slot-def)
+            for vec-type = (cond
+                             (stores-udef-ub
+                               `(simple-array ,stores-udef-ub (*)))
+                             (arr-el-type
+                               `(simple-array ,arr-el-type (*)))
+                             ((not elem-count)
+                               `(simple-array ,slot-type (*)))
+                             ((eq t (upgraded-array-element-type arr-el-type))
+                               `simple-vector)
+                             (t
+                               `(simple-array ,slot-type (*))))
+            for stores-a-udef = (nth-value 1 (get-udef-metadata-from-symbol slot-type))
+            for scaled-idx = (sb-int:gensymify* slot-name "-*-" (prin1-to-string elem-count))
+            ;do (format t "~s:~% orig ~s,~% translated ~s,~% arr-el ~s,~% count ~s,~% gives ~s~%"
+            ;           slot-name slot-type stores-udef-ub arr-el-type elem-count vec-type)
+            ;; TODO: calculate multiples only once
+            collect `(,scaled-idx (* ,idx ,(or elem-count 1))) into lets
+            collect `(,slot-vec-name (aref ,(cs-meta-slots-vec-sym c-s) ,
+                                           (cs-slot-index slot-def))) into lets
+            collect `(,data-vec ,(if (cs-meta-batch-size c-s)
+                                     `(aref ,slot-vec-name ,batch)
+                                     slot-vec-name)) into lets
+            collect `(type ,vec-type ,data-vec) into decls
+            collect (if elem-count
+                        `(,var-name (subseq ,data-vec
+                                            ,scaled-idx
+                                            (+ ,scaled-idx ,elem-count)))
+                        `(,var-name ,(if stores-a-udef
+                                         `(ref-udef-vec ,data-vec ,scaled-idx
+                                                        (symbol-function ',(udef-metadata-store-udef stores-a-udef))
+                                                        (symbol-function ',(udef-metadata-retr-udef  stores-a-udef)))
+                                         ;; Not SVREF, these are SIMPLE-ARRAYs but not SIMPLE-VECTORs
+                                         `(aref ,data-vec ,scaled-idx))))
+            into syms
+            finally (return
+                      (let ((inner `(symbol-macrolet ,syms ,@body)))
+                        `(let* ((,iidx ,index)
+                                (,val (cond
+                                        ((numberp ,iidx)
+                                          ,iidx)
+                                        ((,(udef-metadata-type-p def) ,iidx)
+                                          (,(udef-metadata-store-udef def) ,iidx))
+                                        (t (error "wrong input ~s, expect ~s udef"
+                                                  ,iidx ',(cs-meta-udef c-s))))))
+                           (unless (typep ,val '(unsigned-byte ,(udef-metadata-max-bits def)))
+                             (error "Bad index value ~s, wanted a ~s for ~s"
+                                    ,val
+                                    '(unsigned-byte ,(udef-metadata-max-bits def))
+                                                  ',(cs-meta-udef c-s)))
+                           ,(if (cs-meta-batch-size c-s)
+                                `(multiple-value-bind (,batch ,idx)
+                                     (floor ,val ,(cs-meta-batch-size c-s))
+                                   (let* ,lets
+                                     (declare ,@ decls)
+                                     ,inner))
+                                `(let ((,idx ,val))
+                                   (let* ,lets
+                                     (declare ,@ decls)
+                                     ,inner))))))))))
+
 
 (defmacro def-column-struct (name-and-options &rest slots)
   "Like DEFSTRUCT, but creates an array per slot,
@@ -553,226 +548,212 @@
           (get-existing-udef-f-t-p-b struct-name)
         (sb-int:with-unique-names (old-size idx where)
           (let* ((initial-size (option :initial-size 16384))
-                 (batched% (option :batched nil))
+                 (batched% (option :batch-size nil))
                  (batch-size (if (eq batched% t)
                                  (default-batch-size initial-size)
                                  batched%))
+                 (with-instance-binding-sym (option :with-instance-binding nil))
                  ;;
-                 (udef-id (or old-id
-                              (option :udef-inttype-id nil)))
                  (from-udef (or old-from-u
                                 (option :from-udef
-                                        (sb-int:gensymify* struct-name :-FROM-UDEF))))
+                                        (sb-int:gensymify* struct-name :-from-udef))))
                  (to-udef (or old-to-u
                               (option :to-udef
-                                      (sb-int:gensymify* struct-name :-TO-UDEF))))
+                                      (sb-int:gensymify* struct-name :-to-udef))))
                  (udef-typep (or old-typep
                                  (option :udef-typep
-                                         (sb-int:gensymify* struct-name :-TYPE-P))))
+                                         (sb-int:gensymify* struct-name :-type-p))))
                  (max-bits (or old-bits
                                (option :max-bits 32)))
                  ;;
-                 (base-constructor (option :base-constructor (sb-int:gensymify* struct-name "-CONSTRUCTOR")))
-                 ;;
-                 (2-level? (if batch-size t nil))
+                 (base-constructor (option :base-constructor (sb-int:gensymify* struct-name :-constructor)))
+                 (slots-vec-sym  (option :slots-vec-sym (sb-int:gensymify* struct-name :-slots-vec)))
                  ;;
                  (with-batch-macro (option :with-batch-allocation-name nil))
-                 (ll-constructor (sb-int:gensymify* :make-ll- struct-name))
-                 (var-constructor (sb-int:gensymify* :make-data-var- struct-name))
                  (constructor-name (option :constructor
                                            (intern (format nil "~a~a" :make- struct-name)
                                                    (symbol-package struct-name))))
                  ;;
-                 (col-struct (sb-int:gensymify* :col-struct "-" struct-name))
-                 (upper-struct (sb-int:gensymify* :upper-col-s- struct-name))
                  (data-var (option :data-var (sb-int:gensymify* :data- struct-name)))
-                 ;;
-                 (lower-acc (gensym "LOWER")))
-            (when (zerop (length slots))
-              (error "Need at least one slot in ~s" struct-name))
-            (multiple-value-bind (i-slot-names e-slot-names elem-counts
-                                               e-accessor-names actual-slots
-                                               constructor-arg-list code decl)
-                (handle-c-s-slots struct-name 2-level?
-                                  batch-size data-var initial-size
-                                  from-udef lower-acc
-                                  slots)
-              (let ((base-defaults `((batch-size ,batch-size)
-                                     (i-slot-names ',i-slot-names)
-                                     (elem-counts ',elem-counts)
-                                     (e-slot-names ',e-slot-names)
-                                     (e-acc-fn ',e-accessor-names)
-                                     (type-p ',udef-typep)
-                                     (to-udef ',to-udef)
-                                     (from-udef ',from-udef)
-                                     (max-bits ',max-bits)
-                                     (udef ',struct-name))))
-                (unless 2-level?
-                  (setf upper-struct col-struct))
-                (identity ;sb-ext:with-current-source-form (options slots)
-                  `(progn
-                     ;; Don't redefine
-                     ,(unless old-id
-                        `(def-udef-inttype ,struct-name
-                           :id ,udef-id
-                           :max-bits ,max-bits
-                           ;; NIL gets stored in U-B columns as -1 (mod bits) values
-                           :nil-as-minus-1 t ; TODO configurable?
-                           :to-udef ,to-udef
-                           :from-udef ,from-udef))
+                 (as-alist-sym (sb-int:gensymify* struct-name :-as-alist)))
+            (multiple-value-bind (slot-defs code decl
+                                            maker-arg-list maker-checks
+                                            tmp-names)
+                (handle-c-s-slots struct-name slots)
+              (when (zerop (length slot-defs))
+                (error "Need at least one slot in ~s" struct-name))
+              (let ((slot-names (mapcar #'cs-slot-slot-name slot-defs))
+                    (tmp (gensym)))
+                `(progn
+                   (eval-when (:compile-toplevel :load-toplevel :execute)
+                     ;; won't redefine if udef already exists
+                     (def-udef-inttype ,struct-name
+                       :id ,old-id
+                       :max-bits ,max-bits
+                       ;; NIL gets stored in U-B columns as -1 (mod bits) values
+                       :nil-as-minus-1 t ; TODO configurable?
+                       :typep ,udef-typep
+                       :to-udef ,to-udef
+                       :from-udef ,from-udef)
                      ;;
-                     (locally
-                       (declare (sb-ext:muffle-conditions sb-int:same-file-redefinition-warning
-                                                          sb-int:duplicate-definition))
-                     ,(if 2-level?
-                          `(progn
-                             (defstruct (,col-struct
-                                          (:constructor ,ll-constructor
-                                           (batch-index &aux (upper (symbol-value ',data-var))
-                                                        ; &optional ,@ i-slot-names
-                                                        ))
-                                          (:conc-name nil)
-                                          (:include udef-c-s-lower))
-                               ,@ actual-slots)
-                             (defstruct (,upper-struct
-                                          (:constructor ,var-constructor)
-                                          (:conc-name nil)
-                                          (:include udef-c-s-upper
-                                           (lower-acc #',lower-acc)
-                                           (set-lower-acc #'(setf ,lower-acc))
-                                           (make-lower #',ll-constructor)
-                                           ,@ base-defaults))
-                               (,lower-acc
-                                 (make-array (list 0)
-                                             :element-type ',col-struct
-                                             ;; Must be empty at first, so that ,ll-constructor
-                                             ;; doesn't stumble over the unbound data-var
-                                             :fill-pointer 0
-                                             ))))
-                          ;; single-level only
-                          `(defstruct (,col-struct
-                                        (:constructor ,var-constructor
-                                         (&optional ,@ i-slot-names))
-                                        (:conc-name nil)
-                                        (:include udef-c-s-only
-                                         ,@ base-defaults))
-                             ,@ actual-slots)))
+                     ;; The elements of the slot-vectors have different types.
+                     (declaim (type (simple-array t (*)) ,slots-vec-sym)
+                              (sb-ext:global ,slots-vec-sym))
+                     (setf ,slots-vec-sym
+                           (make-array ,(length slot-defs)
+                                       :element-type '(simple-array t (*))
+                                       :initial-contents (loop repeat ,(length slot-defs)
+                                                               collect #())))
+                     (declaim (sb-ext:always-bound ,slots-vec-sym))
                      ;;
-                     (declaim (type ,(if 2-level?
-                                         upper-struct
-                                         col-struct)
-                                    ,data-var)
+                     (declaim (type udef-c-s-metadata ,data-var)
                               (sb-ext:global ,data-var))
-                     ;; DEFGLOBAL doesn't overwrite a value...
-                     (setf ,data-var (,var-constructor))
-                     (declaim (sb-ext:always-bound ,data-var))
-                     ;;
+                     (setf ,data-var
+                           (make-udef-c-s-metadata
+                             :udef          ',struct-name
+                             :data-var      ',data-var
+                             :batch-size    ,batch-size
+                             ;; initarg gets evaluated!
+                             :slot-defs     (vector ,@ (mapcar (lambda (slot)
+                                                               `(list* ,(first slot)
+                                                                       (quote ,(rest slot))))
+                                                             slot-defs))
+                             :slots-vec-sym ',slots-vec-sym
+                             :as-alist      ',as-alist-sym))
                      (setf (get ',struct-name 'column-struct-data)
                            ,data-var)
+                     (declaim (sb-ext:always-bound ,data-var))
                      ;;
                      #+(or)(declaim (inline ,base-constructor))
-                     (defun ,base-constructor (,where ,idx ,@ e-slot-names)
+                     (defun ,base-constructor (,where ,idx ,@ tmp-names)
                        (declare (optimize (debug 1)
                                           (speed 3)
                                           (compilation-speed 0)
                                           (safety 1))
-                                (type (integer 0 (,(expt 2 max-bits))) ,idx)
-                                (type ,(if 2-level?
-                                           upper-struct
-                                           col-struct) ,where))
+                                (type (integer 0 ,(expt 2 max-bits)) ,idx)
+                                (type udef-c-s-metadata ,where))
                        ;; TODO: provide restart for reallocation
                        (locally
                          (declare (notinline column-struct-size))
                          (loop for ,old-size = (column-struct-size ,where)
                                while (>= ,idx ,old-size)
                                for i from 0 below 5
-                               do (sb-thread:barrier (:memory)
-                                    (sb-thread:barrier (:compiler)
-                                      (column-struct-resize ,where
-                                                            (max (round (* (sqrt 2) ,old-size))
-                                                                 (+ ,old-size
-                                                                    ,(or batch-size 50))))))))
-                       ;; TODO: for a 2-level structure the macro expansion
-                       ;; repeats the (FLOOR idx batch-size) for each slot -
-                       ;; is that optimized away or needs to be fixed?
-                       ,@ (mapcar
-                            (lambda (int ext e-c)
-                              (c-s-value% 2-level? where ; data-var  ;; ,where ???
-                                          int idx e-c lower-acc
-                                          'setf (list ext)))
-                            i-slot-names
-                            e-slot-names
-                            elem-counts)
-                       ;; Return (doubly-)tagged UDEF-INTTYPE
+                               do (column-struct-resize ,where
+                                                        (max (round (* (sqrt 2) ,old-size))
+                                                             (+ ,old-size
+                                                                ,(or batch-size 50))))))
+                       (with-c-s-slots (,struct-name ,idx) ,slot-names
+                         ,@(loop for name in slot-names
+                                 for initarg in tmp-names
+                                 collect `(setf ,name ,initarg)))
+                       ;; Return specifically tagged UDEF-INTTYPE
                        (,to-udef ,idx))
-                     ;; This arglist must be in correct order
-                     (defun ,constructor-name (&key ,@ constructor-arg-list)
+                     ;; User-visible constructor function
+                     (defun ,constructor-name (&key ,@ maker-arg-list)
+                       ,@ maker-checks
                        ;; Value before incrementing
                        (let ((,idx (get-new-id-range ,data-var)))
-                         (,base-constructor ,data-var ,idx ,@ e-slot-names)))
+                         (,base-constructor ,data-var ,idx ,@ slot-names)))
                      ;;
-                     ,@ decl
+                     (declaim ,@ decl)
                      ,@ code
+                     ;;
+                     (defun ,as-alist-sym (,tmp)
+                       (with-c-s-slots (,struct-name ,tmp) ,slot-names
+                         (list
+                           ,@(loop for name in slot-names
+                                   collect (intern (symbol-name name)
+                                                   :keyword)
+                                   collect name))))
                      ;;
                      ,(when with-batch-macro
                         ;; Sanity check
                         (when (not batch-size)
                           (error "WITH-BATCHED-ALLOCATION is only available in batch mode (yet)."))
                         (assert (> batch-size 3)) ;; TODO increase
-                        (return-batch-macro col-struct with-batch-macro
+                        (return-batch-macro struct-name with-batch-macro
                                             data-var batch-size base-constructor
-                                            constructor-arg-list e-slot-names))
-                     ',e-accessor-names ; avoid unused warning
+                                            maker-arg-list slot-names))
+                     ;;
+                     ,(when with-instance-binding-sym
+                        `(defmacro ,with-instance-binding-sym ((udef-type storage-slot)
+                                                               &body body)
+                           "Binds local column-struct-instance for UDEF-TYPE,
+                           using STORAGE-SLOT for keeping the instance data."
+                           :TODO))
                      ;; BROKEN: There is no class named X.
                      #+(or)
                      (defmethod sb-c::describe-object :after ((obj ,struct-name) stream)
-                       ,@(loop for acc in e-accessor-names
-                               for slot in i-slot-names
-                               collect `(format stream "~&  ~A = ~A~%" ',slot (,acc obj))))
-                     ;;
-                     (column-struct-reset ,data-var)
-                     (column-struct-resize ,data-var ,initial-size)
-                     ',struct-name))))))))))
+                       (with-c-s-slots (,struct-name ,idx) slot-names
+                         ,@(loop for name in slot-names
+                                 collect `(format stream "~&  ~A = ~A~%" ',name ,name)))))
+                   ;;
+                   (column-struct-reset ,data-var)
+                   (column-struct-resize ,data-var ,initial-size)
+                   ',struct-name)))))))))
 
 
+#+(or)
 (defmacro make-wrapped-udef-accessor (new old col-struct-name)
   "Wraps the (UNSIGNED x) value returned by (OLD obj) in (NEW obj)
   so that it becomes COLUMN-STRUCT-TYPE.
   If there's a (SETF OLD), a corresponding wrapper is created as well."
+  (declare (ignore col-struct-name)) ;; TODO
   (let* ((fn-type (sb-introspect:function-type old))
          (ret% (third fn-type))
          (ret-type (if (and (consp ret%)
                             (eq 'values (first ret%)))
                        (second ret%)
                        ret%))
-         (udef (get-udef-metadata-from-symbol col-struct-name))
          (old-setf (fboundp `(setf ,old))))
-    (assert udef)
-    (assert (eq (first ret-type) 'unsigned-byte))
-    ;; Must have space for at least as many bits
-    (assert (>= (second ret-type) (c-s-max-bits udef)))
-    `(progn
-       (declaim (inline ,new)
-                ;(ftype (function ,(second fn-type)) (values ,col-struct-name)) ,new)
-                )
-       ;; TODO: &rest or other args possible? Not on a getter, right?
-       (defun ,new (obj)
-         (,(c-s-to-udef udef)
-           (,old obj)))
-       ,(when old-setf
-          (let ((old-args (sb-introspect:function-lambda-list old-setf)))
-            (multiple-value-bind (flags req opt rest keys)
-                (sb-int:parse-lambda-list old-args)
-              (declare (ignore flags))
-              (assert (null keys))
-              ;; declaim ftype?
-              `(defun (setf ,new) ,old-args
-                 (setf (,old ,@ (cdr req)
-                             ,@ opt
-                             ,@ rest)
-                       (,(c-s-from-udef udef) ,(first req)))
-                 ,(first req)))))
-       ',new)))
+    (multiple-value-bind (c-s udef) (get-udef-metadata-from-symbol obj)
+      (assert udef)
+      (assert (eq (first ret-type) 'unsigned-byte))
+      ;; Must have space for at least as many bits
+      (assert (>= (second ret-type) (cs-meta-max-bits udef)))
+      `(progn
+         (declaim (inline ,new)
+                  ;(ftype (function ,(second fn-type)) (values ,col-struct-name)) ,new)
+                  )
+         ;; TODO: &rest or other args possible? Not on a getter, right?
+         (defun ,new (obj)
+           (,(sb-impl:udef-metadata-to-udef udef)
+             (,old obj)))
+         ,(when old-setf
+            (let ((old-args (sb-introspect:function-lambda-list old-setf)))
+              (multiple-value-bind (flags req opt rest keys)
+                  (sb-int:parse-lambda-list old-args)
+                (declare (ignore flags))
+                (assert (null keys))
+                ;; declaim ftype?
+                `(defun (setf ,new) ,old-args
+                   (setf (,old ,@ (cdr req)
+                               ,@ opt
+                               ,@ rest)
+                         (,(sb-impl:udef-metadata-from-udef udef) ,(first req)))
+                   ,(first req)))))
+         ',new))))
+
+
+(defun map-c-s-range (fn col-struct)
+  "Runs MAPCAR over all defined values for COL-STRUCT
+  calling FN with the UDEF."
+  (multiple-value-bind (c-s udef) (get-udef-metadata-from-symbol col-struct t)
+    (loop for i upfrom 0
+          ;; Not a BELOW, because the size may change during iteration
+          while (<= i (column-struct-last-index c-s))
+          for u = (funcall (udef-metadata-to-udef udef) i)
+          collect (funcall fn u))))
+
+(defun c-s-values (col-struct)
+  "Returns a list of all defined COL-STRUCT values."
+  (multiple-value-bind (c-s udef) (get-udef-metadata-from-symbol col-struct t)
+    (loop for i upfrom 0
+          ;; Not a BELOW, because the size may change during iteration
+          while (< i (column-struct-last-index c-s))
+          collect (funcall (udef-metadata-to-udef udef) i))))
+
+
 
 
 

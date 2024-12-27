@@ -5,7 +5,7 @@ include ../asdf-module.mk
 
 SHELL := /usr/bin/bash
 dumpfile  := -
-sbcl := ../../run-sbcl.sh --dynamic-space-size 2000 
+sbcl := ../../run-sbcl.sh --dynamic-space-size 2000
 time := /usr/bin/time --format '  Elapsed:   %E   User: %U   System: %S'
 print_size := [ "x$(dumpfile)" = "x-" ] || ( stat --printf="  Size: %12s" $(dumpfile) ; $(dumpfile) )
 

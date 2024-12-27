@@ -9,13 +9,14 @@
 
 
 
-(defun udef-lookup-index (input table-size)
-  (let* ((hash (sb-int:psxhash  ;; TODO: configurable?
-                 (etypecase input
-                   ((or string base-string array)
-                    input)
-                   (sb-c::udef-inttype
-                     (sb-kernel:get-lisp-obj-address input))))))
+(defun udef-lookup-index (input table-size hash-value)
+  (let* ((hash (or hash-value
+                   (sb-int:psxhash  ;; TODO: configurable?
+                     (etypecase input
+                       ((or string base-string array)
+                        input)
+                       (sb-c::udef-inttype
+                         (sb-kernel:get-lisp-obj-address input)))))))
     (mod hash table-size)))
 
 (defmacro define-udef-lookup (table-size retrieve-fn-sym save-fn-sym &key
@@ -37,7 +38,8 @@
                      :element-type '(or (vector ,udef-type)
                                         (cons ,udef-type)
                                         (cons (vector ,udef-type))
-                                        ,udef-type)
+                                        ,udef-type
+                                        null)
                      :initial-element nil))
        ;;
        ,(when clear-table-fn-sym
@@ -75,11 +77,11 @@
        ,(when retrieve-fn-sym
           `(defun ,retrieve-fn-sym (input)
              (,lookup input
-                      (udef-lookup-index input ,size)
+                      (udef-lookup-index input ,size nil)
                       :check-all)))
        ;;
-       (defun ,save-fn-sym (input create-lambda)
-         (let* ((idx (udef-lookup-index input ,size))
+       (defun ,save-fn-sym (input create-lambda &key int-hash-value)
+         (let* ((idx (udef-lookup-index input ,size int-hash-value))
                 (end :first-run-checks-all))
            (labels
                ((insert ()

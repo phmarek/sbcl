@@ -11,20 +11,27 @@
                                      (:initial-size 10)
                                      (:data-var my-foo-data))
   (a "" :type string)
-  (b 0 :type (unsigned-byte 16)))
+  (b 0 :type (unsigned-byte 16))
+  (c 22 :type fixnum))
 
 (defparameter *no-foo* (make-foo))
 
 (foo-b *no-foo*)
+(sb-udef-inttype:column-struct-get-struct *no-foo*)
 
+(SB-UDEF-INTTYPE::WITH-C-S-SLOTS (FOO *no-foo*)
+    (b a)
+  (format nil "~s ~s" a b))
 
 (describe my-foo-data)
 (let ((x (make-foo :a "1" :b (sb-udef-inttype:column-struct-last-index 'foo)))
       (y (make-foo :a "22" :b 61)))
+  (incf (foo-b y))
   (list (foo-a x)
           (foo-b x)
           (foo-a y)
           (foo-b y)
+          (sb-udef-inttype::column-struct-last-index 'foo)
           (sb-udef-inttype::column-struct-size 'foo)
           (sb-udef-inttype::column-struct-size my-foo-data)))
 
@@ -33,6 +40,7 @@
 (sb-udef-inttype::def-udef-inttype bar
   :to-udef to-bar-udef
   :from-udef from-bar-udef
+  :store-udef store-a-bar
   :nil-as-minus-1 t
   :max-bits 32)
 
@@ -41,25 +49,57 @@
                                       (:batched 8)
                                       (:constructor make-my-bar)
                                       (:base-constructor make-my-bar-base)
-                                      (:initial-size 5)
+                                      (:initial-size 500)
+                                      (:batch-size 10)
                                       (:with-batch-allocation-name with-batch)
                                       (:data-var my-bar-data))
-  (name nil :type symbol)
-  (i 0 :type (unsigned-byte 32))
-  (vec 0 :type (array (unsigned-byte 32) 3))
-  (typed-ref% 0 :type (unsigned-byte 32))
+  (name :name :type symbol)
+  (i 2 :type (unsigned-byte 32))
+  (vec 3 :type (array (unsigned-byte 32) (3)))
+  (typed-ref% 4 :type (unsigned-byte 32))
   (ref *no-foo* :type T)
   (self nil :type bar)
-  (self-vec nil
-            :type (array bar (4)))
+;;  (self-vec nil :type (array bar (4))) ;; TODO
   (udef *no-foo* :type foo))
-
 
 (describe my-bar-data)
 
-(defparameter *a-bar* (make-my-bar :name 'first :i 5515 :ref nil :vec #(1 2 3 4)))
+(sb-udef-inttype::cs-slot-trslt-type
+(sb-udef-inttype::get-slot-def 'bar 0 '(self nil :type bar))
+)
+
+(defparameter *a-bar* (make-my-bar :name 'first
+                                   :i 5515
+                                   :ref nil
+                                   :vec (make-array 3 :element-type '(unsigned-byte 32)
+                                                    :initial-contents '(1 2 3))))
+
+#+(or)
+(sb-udef-inttype::with-c-s-slots (bar 0)
+    (self)
+  (values self))
+
+(find 'self (sb-udef-inttype::cs-meta-slot-defs
+          (sb-udef-inttype::get-udef-metadata-from-symbol 'bar))
+      :key #'sb-udef-inttype::cs-slot-slot-name)
 
 
+
+#+(or)
+(map 'list (lambda (x)
+             (format t "~s: ~s~%"
+                     (aref x 0)
+                     (type-of (aref x 0))))
+             (sb-udef-inttype::c-s-slots-vec my-bar-data))
+
+#+(or)
+(compile nil (lambda (i)
+               (SB-UDEF-INTTYPE::WITH-C-S-SLOTS (bar i)
+                 (name i self ref vec udef)
+                 (format nil "~s" (list name i self ref vec udef)))))
+
+
+#|
 (sb-udef-inttype:make-wrapped-udef-accessor bar-typed-ref bar-typed-ref% bar)
 
 (sb-udef-inttype:column-struct-get-struct *a-bar*)
@@ -68,6 +108,7 @@
 (bar-udef *a-bar*)
 (setf (bar-udef *a-bar*)
       (make-foo))
+|#
 
 #+(or)
 (disassemble 'bar-name)
