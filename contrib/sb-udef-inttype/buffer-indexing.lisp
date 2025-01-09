@@ -103,7 +103,7 @@
            (pos 0 :type (unsigned-byte ,index-bits) :accessor ,pos-sym))
          ;;
          (declaim (type sb-vm:word ,eob-sym))
-         (defparameter ,eob-sym 0)
+         (defvar ,eob-sym 0)
          (declaim (sb-ext:always-bound ,eob-sym))
          ;;
          (defparameter ,buffer-sym (make-array (list 0)

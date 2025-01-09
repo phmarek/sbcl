@@ -171,6 +171,8 @@
             (eval-when (:compile-toplevel :load-toplevel :execute)
               (deftype ,name () 'sb-int:udef-inttype)
               ;;
+              (assert (= ,id
+                         (register-udef-subtype-id ',name)))
               (unless (get ',name 'udef-metadata)
                 (setf (get ',name 'udef-metadata)
                       (make-udef-metadata

@@ -608,6 +608,7 @@
                      ;;
                      (declaim (type udef-c-s-metadata ,data-var)
                               (sb-ext:global ,data-var))
+                     ;; TODO: loses value upon reload, keep old contents?
                      (setf ,data-var
                            (make-udef-c-s-metadata
                              :udef          ',struct-name
