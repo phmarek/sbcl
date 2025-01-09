@@ -17,6 +17,7 @@
 
 (foo-b *no-foo*)
 
+
 (describe my-foo-data)
 (let ((x (make-foo :a "1" :b (sb-udef-inttype:column-struct-last-index 'foo)))
       (y (make-foo :a "22" :b 61)))
@@ -49,8 +50,7 @@
   (typed-ref% 0 :type (unsigned-byte 32))
   (ref *no-foo* :type T)
   (self nil :type bar)
-  (self-vec (make-array 4 :element-type 'bar
-                        :initial-element (to-bar-udef nil))
+  (self-vec nil
             :type (array bar (4)))
   (udef *no-foo* :type foo))
 

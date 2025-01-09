@@ -18,7 +18,6 @@
 ;;     ┌global-var─────┐
 ;;     │ udef          │
 ;;     │ mfill-pointer │
-;;     │ master-var    │
 ;;     │ ...           │
 ;;     │ #:slot0       ├─────────────>┌vect0┐
 ;;     │ #:slot1       ├────>┌vect1┐  │v-0-0│
@@ -31,8 +30,8 @@
 ;; 2-level-case:
 ;;
 ;;     ┌───────────────┐<──────┐
-;;     │ master-var    │       │     ┌───────────────┐  ┌vect0┐
-;;     │ udef          │       └─────┤ master-var    │  │v-0-0│
+;;     │ udef          │       │     ┌───────────────┐  ┌vect0┐
+;;     │ elem-counts   │       └─────┤ upper         │  │v-0-0│
 ;;     │ mfill-pointer │             │ batch-index   │  │v-1-0│
 ;;     │ ...           │             │ lfill-pointer │  │v-2-0│
 ;;     │ #:lower       ├─>┌batches┐  │ #:slot-0      ├─>└─────┘
@@ -93,7 +92,6 @@
              (:conc-name c-s-)
              (:include udef-metadata))
   (udef         nil :type symbol     :read-only t)
-  (master-var   nil :type symbol     :read-only t)
   (e-slot-names nil :type list       :read-only t)
   (i-slot-names nil :type list       :read-only t)
   (e-acc-fn     nil :type list       :read-only t)
@@ -142,7 +140,7 @@
       (when (and c-s-req
                  (not v-c-s))
         (error "~s is not a column-structure type." sym))
-      (let ((v (or c-s-req
+      (let ((v (or v-c-s
                    (get sym 'udef-metadata))))
         (when v
           (etypecase v
@@ -599,8 +597,7 @@
                                   batch-size data-var initial-size
                                   from-udef lower-acc
                                   slots)
-              (let ((base-defaults `((master-var ',data-var)
-                                     (batch-size ,batch-size)
+              (let ((base-defaults `((batch-size ,batch-size)
                                      (i-slot-names ',i-slot-names)
                                      (elem-counts ',elem-counts)
                                      (e-slot-names ',e-slot-names)

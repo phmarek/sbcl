@@ -107,6 +107,8 @@
   (type-p       nil :type symbol          :read-only t)
   (to-udef      nil :type symbol          :read-only t)
   (from-udef    nil :type symbol          :read-only t)
+  ;; Produces an integer like FROM-UDEF, but NIL gets translated to -1(mod).
+  (store-udef    nil :type symbol          :read-only t)
   (max-bits       0 :type (integer 1 48)  :read-only t))
 
 (defun get-existing-udef-f-t-p-b (name)
@@ -149,6 +151,7 @@
            (max-bits (or old-bits
                          max-bits))
            (mask (1- (ash 1 max-bits)))
+           (store-fn (sb-int:symbolicate name :-store))
            ;; TODO: use *PACKAGE* instead of the NAMEs package?
            (typep-fn (or old-typep
                          typep
@@ -165,6 +168,7 @@
               :udef-id id
               :to-udef  to-udef-fn
               :from-udef from-udef-fn
+              :store-udef store-fn
               :type-p typep-fn
               :max-bits max-bits))
          ;;
@@ -175,14 +179,10 @@
            ;; TODO: box/unbox
            (declaim (inline ,typep-fn)
                     (ftype (function (T) (member t nil)) ,typep-fn))
-           ;; From UDEF to integer
-           (declaim (inline ,from-udef-fn)
-                    (ftype (function (,name &optional (member t nil))
-                                     (values (or (integer 0 ,mask)
-                                                 ,@(when nil-as-minus-1
-                                                      `(null)) )))
-                         ,from-udef-fn))
-           ;; From integer to UDEF
+           (defun ,typep-fn (x)
+             (= ,id (udef-inttype-tag x)))
+           ;; From integer (index) to UDEF.
+           ;; An incoming NIL gets translated to -1, if so allowed.
            (declaim (inline ,to-udef-fn)
                     (ftype (function ( ,(if nil-as-minus-1
                                             `(or (integer 0 (,mask))
@@ -190,8 +190,6 @@
                                             `(integer 0 ,mask)) )
                                      ,name)
                            ,to-udef-fn))
-           (defun ,typep-fn (x)
-             (= ,id (udef-inttype-tag x)))
            (defun ,to-udef-fn (x)
              (declare (optimize (speed 3) (debug 0) (safety 1)))
              (make-udef-inttype (logior ,id
@@ -200,6 +198,15 @@
                                                  ,mask
                                                  x)
                                              +udef-tag-bits+))))
+           ;; From a (boxed) UDEF to an integer (index).
+           ;; A stored -1 may get translated to NIL.
+           ;; When initializing a typed slot or array, an incoming
+           (declaim (inline ,from-udef-fn)
+                    (ftype (function (,name &optional (member t nil))
+                                     (values (or (integer 0 ,mask)
+                                                 ,@(when nil-as-minus-1
+                                                      `(null)) )))
+                         ,from-udef-fn))
            ;; When writing integers into specialized arrays,
            ;; we need the -1 representation.
            (defun ,from-udef-fn (x &optional nil-to-minus-1)
@@ -210,6 +217,16 @@
                         (= num ,mask))
                    nil
                    num))))
+         ;; For storing in a typed slot or array
+           (declaim (inline ,store-fn)
+                    (ftype (function ((or ,name null))
+                                     (values (integer 0 ,mask)))
+                         ,store-fn))
+           (defun ,store-fn (x)
+             (declare (optimize (speed 3) (debug 0) (safety 1)))
+             (if x
+                 (udef-general-get-value x)
+                 ,mask))
          ;;
          ',name))))
 
