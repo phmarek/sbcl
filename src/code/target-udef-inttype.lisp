@@ -26,17 +26,18 @@
                                              +udef-reserved-low-bits+))
 
 
-(defparameter *udef-types* nil
+(defvar *udef-types* nil
   "Vector of user-defined integer types.
   NIL until first use.")
 
 
 (defun get-existing-udef-id (name &key (start 0))
-  (position name *udef-types*
-            :test #'eq
-            :start start))
+  (when *udef-types*
+    (position name *udef-types*
+              :test #'eq
+              :start start)))
 
-(defun register-udef-subtype-id (type-name &key (random t))
+(defun register-udef-subtype-id (type-name &key (random t) preferred)
   "Looks for a free ID in *UDEF-TYPES*,
   and registers TYPE-NAME.
   Not thread-safe."
@@ -47,6 +48,7 @@
                                      :initial-element nil
                                      :element-type 'symbol)))
     (let ((id (or (get-existing-udef-id type-name)
+                  preferred
                   (when random
                     (loop repeat 3
                           for i = (random len)
@@ -69,17 +71,44 @@
 ;; SB-KERNEL:CTYPE instance constructor called in a non-system file
 ;;    [Condition of type SIMPLE-ERROR]
 
-#+(or)
-(declaim (ftype (function (udef-inttype) (unsigned-byte #.+udef-tag-bits+))
-                udef-inttype-tag))
+(declaim (ftype (function (udef-inttype) (unsigned-byte #. +udef-tag-bits+))
+                udef-inttype-tag)
+         (inline udef-inttype-tag))
 (defun udef-inttype-tag (x)
   (logand (1- (ash 1 +udef-tag-bits+))
           (udef-inttype-value x)))
 
 (declaim (inline udef-general-get-value))
 (defun udef-general-get-value (x)
-  (ash (udef-inttype-value x)
-       (- +udef-tag-bits+)))
+  (ash (sb-kernel:get-lisp-obj-address x)
+       (- (+ sb-vm:n-widetag-bits +udef-tag-bits+))))
+
+(declaim (inline make-twice-tagged-udef)
+         (ftype (function ((unsigned-byte #. +udef-tag-bits+)
+                           (unsigned-byte #. +udef-usable-remaining-bits+))
+                          (values udef-inttype))
+                make-twice-tagged-udef))
+(defun make-twice-tagged-udef (tag value)
+  (sb-kernel:%make-lisp-obj
+    (logior (ash value +udef-reserved-low-bits+)
+            (logior (ash tag sb-vm:n-widetag-bits)
+                    udef-inttype-lowtag))))
+
+(declaim (notinline check-tagged-udef-value)
+         (ftype (function ((unsigned-byte #. +udef-tag-bits+)
+                           udef-inttype)
+                          (values (unsigned-byte #. +udef-usable-remaining-bits+)))
+                check-tagged-udef-value))
+(defun check-tagged-udef-value (tag udef)
+  (let* ((v (sb-kernel:get-lisp-obj-address udef))
+         (want (logior (ash tag sb-vm:n-widetag-bits)
+                       udef-inttype-lowtag))
+         (have (ldb (byte +udef-reserved-low-bits+ 0)
+                    v)))
+    (unless (= want have)
+      (error "need a udef with tag ~d, not a ~s" tag udef))
+    (ldb (byte +udef-usable-remaining-bits+ +udef-reserved-low-bits+)
+         v)))
 
 (declaim (ftype (function (T)
                           (values symbol
@@ -89,7 +118,8 @@
   "Returns the type symbol, and the content as second value."
   ;; TODO: error out if not a udef-inttype?
   (if (udef-inttype-p x)
-    (let ((type (aref *udef-types* (udef-inttype-tag x))))
+    (let ((type (and *udef-types*
+                     (aref *udef-types* (udef-inttype-tag x)))))
       (if type
           (values type
                   ;; Possibly we should call using the class' reader slot --
@@ -102,11 +132,14 @@
       (values nil 0)))
 
 (defstruct udef-metadata
-  (id             0 :type (integer 0 255) :read-only t)
+  (udef-id        0 :type (integer 0 255) :read-only t)
   ;; A slot called TYPEP doesn't work with default args in DEFSTRUCT
   (type-p       nil :type symbol          :read-only t)
   (to-udef      nil :type symbol          :read-only t)
   (from-udef    nil :type symbol          :read-only t)
+  ;; Produces an integer like FROM-UDEF, but NIL gets translated to -1(mod).
+  (store-udef   nil :type symbol          :read-only t)
+  (retr-udef    nil :type symbol          :read-only t)
   (max-bits       0 :type (integer 1 48)  :read-only t))
 
 (defun get-existing-udef-f-t-p-b (name)
@@ -117,27 +150,33 @@
   (let* ((prev-def% (get name 'udef-metadata))
          (prev-def (when (udef-metadata-p prev-def%)
                         prev-def%)))
-    (values (and prev-def (get-existing-udef-id    name))
+    (values (or (and prev-def (udef-metadata-udef-id   prev-def))
+                (get-existing-udef-id name))
             (and prev-def (udef-metadata-from-udef prev-def))
             (and prev-def (udef-metadata-to-udef   prev-def))
             (and prev-def (udef-metadata-type-p    prev-def))
             (and prev-def (udef-metadata-max-bits  prev-def)))))
 
 (export '( udef-metadata
+           udef-metadata-udef-id
            udef-metadata-from-udef
            udef-metadata-to-udef
+           udef-metadata-store-udef
+           udef-metadata-retr-udef
+           udef-metadata-udef-sym
            udef-metadata-type-p
            udef-metadata-max-bits
+           make-twice-tagged-udef
+           check-tagged-udef-value
            get-existing-udef-f-t-p-b))
 
-(defmacro def-udef-inttype (name &key to-udef
-                                 from-udef
-                                 id
-                                 typep
+(defmacro def-udef-inttype (name &key id
+                                 to-udef from-udef
+                                 retr-udef store-udef typep
                                  (nil-as-minus-1 t)
                                  (max-bits +udef-usable-remaining-bits+))
   "Defines a new user-defined integer type."
-  (multiple-value-bind (old-id old-from-udef old-to-udef old-typep old-bits)
+  (multiple-value-bind (old-id)
       (get-existing-udef-f-t-p-b name)
     (let* ((id (cond
                  ((and old-id       id  (= old-id id))  id)
@@ -145,62 +184,106 @@
                  (old-id                            old-id)
                  (t
                   (register-udef-subtype-id name))))
-           (max-bits (or old-bits
-                         max-bits))
            (mask (1- (ash 1 max-bits)))
            ;; TODO: use *PACKAGE* instead of the NAMEs package?
-           (typep-fn (or old-typep
-                         typep
+           (typep-fn (or typep
                          (sb-int:symbolicate name :-P)))
-           (from-udef-fn (or old-from-udef
-                             from-udef
-                             (sb-int:symbolicate name :-from-udef)))
-           (to-udef-fn (or old-to-udef
-                           to-udef
-                           (sb-int:symbolicate :MAKE name))))
-      ;; TODO: tell if old definition overrode new values?
-      `(progn
-         (eval-when (:compile-toplevel :load-toplevel :execute)
-           (deftype ,name () 'sb-int:udef-inttype))
-         ;;
-         (setf (get ',name 'udef-metadata)
-               (make-udef-metadata
-                 :to-udef  ',to-udef-fn
-                 :from-udef ',from-udef-fn
-                 :type-p ',typep-fn
-                 :max-bits ,max-bits))
-         ;;
-         ;; TODO: box/unbox
-         (declaim (inline ,typep-fn)
-                  (ftype (function (T) (member t nil)) ,typep-fn))
-         (declaim (inline ,from-udef-fn)
-                  (ftype (function ( (or ,name
-                                         ,@ (when nil-as-minus-1
-                                              `(null))) )
-                                   (values (unsigned-byte ,max-bits)))
-                         ,from-udef-fn))
-         (declaim (inline ,to-udef-fn)
-                  (ftype (function ( (or (unsigned-byte ,max-bits)
-                                         ,@ (when nil-as-minus-1
-                                              `(null))) )
-                                   ,name)
-                         ,to-udef-fn))
-         (defun ,typep-fn (x)
-           (= ,id (udef-inttype-tag x)))
-         (defun ,to-udef-fn (x)
-           (make-udef-inttype (logior ,id
-                                      (ash (if (and ,(and nil-as-minus-1 t)
-                                                    (eq x nil))
-                                               ,mask
-                                               x)
-                                           +udef-tag-bits+))))
-         (defun ,from-udef-fn (x)
-           (let ((num (udef-general-get-value x)))
-             (if (and ,(and nil-as-minus-1 t)
-                      (= num ,mask))
-                 nil
-                 num)))
-         ',name))))
+           (retr-fn (or retr-udef
+                         (sb-int:symbolicate name :-RETRIEVE)))
+           (store-fn (or store-udef
+                         (sb-int:symbolicate name :-STORE)))
+           ;; these two still needed?
+           (from-udef-fn (or from-udef
+                             (sb-int:symbolicate name :-NUM-FROM-UDEF)))
+           (to-udef-fn (or to-udef
+                           (sb-int:symbolicate :MAKE- name))))
+         ;; (DEBUG 1) is necessary to keep the argument and result types
+         `(progn
+            (eval-when (:compile-toplevel :load-toplevel :execute)
+              (deftype ,name () 'sb-int:udef-inttype)
+              ;;
+              (assert (= ,id
+                         (register-udef-subtype-id ',name :preferred ,id)))
+              (unless (get ',name 'udef-metadata)
+                (setf (get ',name 'udef-metadata)
+                      (make-udef-metadata
+                        :udef-id ,id
+                        :to-udef  ',to-udef-fn
+                        :from-udef ',from-udef-fn
+                        :store-udef ',store-fn
+                        :retr-udef ',retr-fn
+                        :type-p ',typep-fn
+                        :max-bits ,max-bits))
+                ;; TODO: box/unbox
+                (declaim (inline ,typep-fn)
+                         (ftype (function (T) (member t nil)) ,typep-fn))
+                (defun ,typep-fn (x)
+                  (and (udef-inttype-p x)
+                       (= ,id (udef-inttype-tag x))))
+                ;; From integer (index) to UDEF.
+                ;; An incoming NIL gets translated to -1, if so allowed.
+                (declaim (inline ,to-udef-fn)
+                         (ftype (function ( ,(if nil-as-minus-1
+                                                 `(or (integer 0 ,mask)
+                                                      null)
+                                                 `(integer 0 ,mask)) )
+                                          ,name)
+                                ,to-udef-fn))
+                (defun ,to-udef-fn (x)
+                  (declare (optimize (speed 3) (debug 1) (safety 1)))
+                  (make-udef-inttype (logior ,id
+                                             (ash (if (and ,(and nil-as-minus-1 t)
+                                                           (eq x nil))
+                                                      ,mask
+                                                      x)
+                                                  +udef-tag-bits+))))
+                ;; From a (boxed) UDEF to an integer (index).
+                ;; A stored -1 may get translated to NIL.
+                ;; When initializing a typed slot or array, an incoming
+                (declaim (inline ,from-udef-fn)
+                         (ftype (function (,name &optional (member t nil))
+                                          (values (or (integer 0 ,mask)
+                                                      ,@(when nil-as-minus-1
+                                                          `(null)) )))
+                                ,from-udef-fn))
+                ;; When writing integers into specialized arrays,
+                ;; we need the -1 representation.
+                (defun ,from-udef-fn (x &optional nil-to-minus-1)
+                  (declare (optimize (speed 3) (debug 1) (safety 1)))
+                  (let ((num (udef-general-get-value x)))
+                    (if (and ,(and nil-as-minus-1 t)
+                             (not nil-to-minus-1)
+                             (= num ,mask))
+                        nil
+                        num)))
+                ;; For retrieving from a typed slot or array
+                (declaim (inline ,retr-fn)
+                         (ftype (function ((integer 0 ,mask))
+                                          (values (or ,name null)))
+                                ,retr-fn))
+                (defun ,retr-fn (x)
+                  (declare (optimize (speed 3) (debug 1) (safety 1)))
+                  (if (= x ,mask)
+                      nil
+                      (make-twice-tagged-udef ,id x)))
+                ;; For storing in a typed slot or array
+                #+(or)
+                (sb-c:defknown ,store-fn
+                    ((or ,name null))
+                    (values (integer 0 ,mask))
+                    (sb-c:movable sb-c:foldable sb-c:flushable)) ;fixed-args unboxed-return
+                (declaim (inline ,store-fn)
+                         (ftype (function ((or ,name null))
+                                          (values (integer 0 ,mask)))
+                                ,store-fn))
+                (defun ,store-fn (x)
+                  (declare (optimize (speed 3) (debug 1) (safety 1)))
+                  (if x
+                      (udef-general-get-value x)
+                      ,mask))))
+            ;;
+            (values ',name
+                    ,id)))))
 
 
 (defun udef-eq (u1 u2)
@@ -215,5 +298,7 @@
 
 (sb-ext:define-hash-table-test udef-eq hash-udef)
 
+
+;; TODO: (udef-tag-p udef tag) with compiler-macro
 
 ;; TODO: subclasses for MOP methods

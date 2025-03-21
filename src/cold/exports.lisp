@@ -3670,6 +3670,7 @@ package is deprecated in favour of SB-MOP.")
               "UDEF-METADATA"
               "UDEF-METADATA-UDEF-READER"
               "UDEF-METADATA-UDEF-MAKER"
+              "UDEF-METADATA-UDEF-SYM"
               "UDEF-METADATA-MAX-BITS"
            )
   (:export "REGISTER-UDEF-SUBTYPE-ID"
