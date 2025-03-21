@@ -188,24 +188,8 @@ then the storage vector will need to use an element-type `(UNSIGNED-BYTE 64)`,
 which is not quite as compact, but still reduces GC load, compared to
 some 100'000 or millions of `STRING` instances.
 
-
------------------------------------
-- Var-len Data gets copied in and out (SUBSEQ), so no modification possible later on
-
-
-## Example 2:
-
-For really small structures (up to 48 bits actual data) the
-SB-BITFIELD-STRUCT might be helpful.
-
-
-```lisp
-(sb-bitfield-struct:def-bitfield-struct bb-bits
-  (eight 255 :type (unsigned-byte 8))
-  (two 3 :type (unsigned-byte 2)))
-  (one 1 :type (unsigned-byte 1)))
-
-(defparameter *bbmax* (make-bbbits))
-(defparameter *bbzero* (make-bbbits :eight 0 :two 0 :one 0))
-```
-
+Also, this has a simple deduplication logic built in that can
+be activated by passing a `:dedup-size` and corresponding
+function names in - a vector of that size will get populated
+at hash-based indices with the derived `UDEF`s, allowing
+for quick lookup and avoiding duplicates.
