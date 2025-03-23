@@ -18,6 +18,8 @@
 
 (foo-b *no-foo*)
 (sb-udef-inttype:column-struct-get-struct *no-foo*)
+(sb-udef-inttype:with-c-s-slots (foo *no-foo*) (a b c)
+  (format t "~s ~s ~s~%" a b c))
 
 ;(describe my-foo-data)
 (let ((x (make-foo :a "1" :b (sb-udef-inttype:column-struct-last-index 'foo)))
@@ -68,7 +70,7 @@
   (values (length
             (sb-udef-inttype:c-s-values 'bar))
           (let ((c 0))
-            (sb-udef-inttype:map-c-s-range 
+            (sb-udef-inttype:map-c-s-range
               (lambda (x)
                 (declare (ignore x))
                 (incf c))
@@ -88,8 +90,10 @@
               :ref nil
               :vec (make-array 3 :element-type '(unsigned-byte 32)
                                :initial-contents '(1 2 3)))))
-  (sb-udef-inttype::with-c-s-slots (bar bar1) (vec i)
-    (incf i)
+  (sb-udef-inttype::with-c-s-slots (bar bar1) (vec (i2 i) (i3 i))
+    (assert (= i2 i3))
+    (incf i2)
+    (assert (= i2 i3))
     (setf (aref vec 0)
           17))
   (assert (= 13 (bar-i bar1)))

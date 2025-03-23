@@ -606,6 +606,7 @@
                                 ,iidx ',(cs-meta-udef c-s)))))
               (,c-s-var (load-time-col-struct ',udef-name))
               (,slots-vec (load-time-slot-vector ',udef-name)))
+         (declare (ignorable ,c-s-var))
          (unless (typep ,val ',(cs-s-storage-type def))
            (error "Bad index value ~s, wanted a ~s for ~s"
                   ,val
