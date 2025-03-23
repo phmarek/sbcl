@@ -63,7 +63,7 @@ For dynamically-sized data, see /Buffer indexing/ below.
 ```lisp
 (sb-column-struct:def-column-struct (person
                                       (:max-bits 16)
-                                      (:base-constructor make-person)
+                                      (:constructor make-person)
                                       (:initial-size 50000))
   (name   nil :type symbol)
   (id       0 :type (unsigned-byte 32))
@@ -76,12 +76,16 @@ For dynamically-sized data, see /Buffer indexing/ below.
                                 :uuid #(1 2 3 4 5 6 7 8 ...))
 
 (person-name *somebody*)
+
+(with-c-s-slots (person *somebody*) (name (person-id id))
+  (format t "~s ~d~%" name person-id))
 ```
 
 Note that accessing a flattened vector (like the `UUID` above) means 
 referencing it via an displaced array; perhaps optionally providing
-a copy (via SUBSEQ) might be helpful, though
-this makes a difference for GC and when SETFing individual elements.
+a copy (via SUBSEQ) might be helpful,
+although this makes a difference for GC and would
+inhibit SETFing individual elements.
 
 The basic premise is to use C-S as a memory-efficient read-only database.
 
