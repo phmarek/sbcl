@@ -25,10 +25,11 @@
                                          clear-table-fn-sym
                                          (udef-type 'sb-c::udef-inttype)
                                          (table-sym (gensym "LOOKUP")))
-  "SAVE-FN-SYM gets defined to be a function of one argument
-  (which should be a string or (array (unsigned-byte)));
+  "Allocate a vector of TABLE-SIZE and use it as a lookup table.
+  SAVE-FN-SYM gets defined to be a function of one argument
+  (which should be a STRING or (ARRAY (UNSIGNED-BYTE)));
   if the given argument cannot be found via TEST and KEY,
-  the new UDEF to be stored is built by running the BODY.
+  the new UDEF to be stored is built by running a callback function.
   RETRIEVE-FN-SYM can be used for lookup without inserting data."
   (sb-int:with-unique-names (lookup size)
     `(progn
