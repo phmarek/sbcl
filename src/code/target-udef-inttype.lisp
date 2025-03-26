@@ -301,6 +301,15 @@
 (sb-ext:define-hash-table-test udef-eq hash-udef)
 
 
+(defmethod print-object ((obj sb-int:udef-inttype) stream)
+  (let* ((v (sb-kernel:get-lisp-obj-address obj))
+         (utag (ldb (byte +udef-tag-bits+ sb-vm:n-widetag-bits) v)))
+    (format stream "#<UDEF #x~x~@[; tagged #x~x~]~@[, a ~s~]>"
+            (ash v (- +udef-reserved-low-bits+))
+            utag
+            (and *udef-types*
+                 (aref *udef-types* utag)))))
+
 ;; TODO: (udef-tag-p udef tag) with compiler-macro
 
 ;; TODO: subclasses for MOP methods
