@@ -1,8 +1,27 @@
 # User-Defined Integer-Types
 
+A machine word consists of eg. 64 bits:
 
-A tag (`UDEF-INTTYPE-LOWTAG`) is reserved for user-defined integers;
-another 8 bits (`+UDEF-TAG-BITS+`) provide several different types.
+  +--------------------------------------------------------------+
+  |MSB                                                        LSB|
+  +--------------------------------------------------------------+
+  64                                                             0
+
+SBCL uses a few bits to tag values (FIXNUM, pointers, CONSes, etc.);
+one of the available tags is now reserved (`UDEF-INTTYPE-LOWTAG`):
+
+  +-------------------------------------------------------+------+
+  |MSB                                                    |lowtag|
+  +-------------------------------------------------------+------+
+  64                                                     8|7     0
+
+On top of that, this contrib uses further 8 bits (`+UDEF-TAG-BITS+`)
+to provide several different types of integers.
+
+  +-----------------------------------------------+-------+------+
+  |MSB                                            | udef  |lowtag|
+  +-----------------------------------------------+-------+------+
+  64                                            16|15    8|7     0
 
 That means that besides the standard Common Lisp numeric tower
 up to 256 different integer types with (on 64bit architectures) 48 bits each
@@ -12,7 +31,9 @@ This makes UDEFs` "better" than reusing `NaN` values,
 reserving `FIXNUM`s ranges, and so on.
 
 
-# Separate Numeric Types
+# Use-Cases
+
+## Separate Numeric Types
 
 One use case is simply providing non-standard numeric types -
 eg. a probability value.
@@ -39,7 +60,7 @@ eg. a probability value.
 ```
 
 
-# A Column-Based Structure
+## A Column-Based Structure
 
 Another nice use-case is using distinct UDEFs as indices in (large) arrays;
 this way one UDEF value is comparable to a (pointer to a) class instance,
@@ -61,10 +82,10 @@ For dynamically-sized data, see /Buffer indexing/ below.
 
 
 ```lisp
-(sb-column-struct:def-column-struct (person
-                                      (:max-bits 16)
-                                      (:constructor make-person)
-                                      (:initial-size 50000))
+(def-column-struct (person
+                    (:max-bits 16)
+                    (:constructor make-person)
+                    (:initial-size 50000))
   (name   nil :type symbol)
   (id       0 :type (unsigned-byte 32))
   (mother nil :type person)
@@ -142,19 +163,18 @@ Also, the all-one value for that `UNSIGNED-BYTE` is taken to mean `NIL`;
 so in the `PERSON` example above, a `:mother NIL` gets converted to/from `#xffff`.
 
 
-# Bitfields
+## Bitfields
 
 With 48 usable bits, more than one data item can be stored in a `UDEF`.
 
-This is what `DEF-BITFIELD-STRUCT` provides: an immediate values consisting of multiple parts.
+This is what `:allocation :immediate` provides: a machine word consisting of multiple parts.
 
 
 ```lisp
 (sb-udef-inttype:def-bitfield-struct bbbits
-  (eight 255 :type (unsigned-byte 8) :modulo t)
-  (four . 4)
-  (one 1 :type (unsigned-byte 1)))
-
+  (eight 255 :type (unsigned-byte 8) :allocation :immediate)
+  (four    0 :type (unsigned-byte 4) :allocation :immediate)
+  (one     0 :type (unsigned-byte 1) :allocation :immediate))
 
 (defparameter *x* 
   (make-bbbits :eight #x55 :four #xa :one 0))
@@ -167,33 +187,54 @@ This is what `DEF-BITFIELD-STRUCT` provides: an immediate values consisting of m
 
 This is used in /Buffer indexing/, see below.
 
+With only immediate slots no storage vectors are needed.
 
-# Buffer-Indexing
+
+## Buffer-Indexing
 
 When storing lots of variable-length data, allocating many `STRING`s or
 `(UNSIGNED-BYTE 8)` vectors mean high GC load again.
 
-`MAKE-UDEF-ADDRESSED-BUFFER` creates a `UDEF` immediate that stores
-the length and index in large storage vectors together;
-eg. strings with a maximum length of 255 and totaling up to $2^24$ characters
-can be packed into a 32bit value.
+Defining a column-structure that stores the length and an index into a large storage vector,
+only a few specialized arrays get allocated -- so GC load is minimal.
+
+Eg. strings with a maximum length of 255 and totaling up to $2^24$ characters
+can be packed into a 32bit value;
+by using the correct slot order and a default value form the length doesn't even have to be manually specified.
 
 ```lisp
-(MAKE-UDEF-ADDRESSED-BUFFER filename
-  :len-bits 8
-  :index-bits 24)
+(def-column-struct (filename
+                    (:index-bits 24)
+                    (:max-bits   32)
+                    (:batch-size (* 1024 1024)))
+ (name ""            :type (array character (len)))
+ (len  (length name) :type (unsigned-byte 8)        :allocation :immediate))
+
+(make-filename :name "/etc/services")
 ```
 
-When using this type in a /column-struct/, the storage vectors
-will be allocated as `(UNSIGNED-BYTE 32)`, 
-meaning compact storage and no work during GC. \
-With more than 16M of `filename`s, more `:INDEX-BITS` become necessary;
+
+This provides a layout like this:
+
+  +----------------+------+-----------------------+-------+------+
+  |MSB             | len  |          index        | udef  |lowtag|
+  +----------------+------+-----------------------+-------+------+
+  64             48|47  40|39                   16|15    8|7     0
+
+The `LEN` slot is stored in the UDEF-tagged machine word,
+and the index points into large vectors of 1MB each.
+
+# Other interesting points
+
+
+## Storing UDEFs
+
+When UDEFs are used as slot types in a /column-struct/, the underlying storage vectors
+will be allocated with a matching `(UNSIGNED-BYTE x)` element-type, 
+meaning compact storage and no work during GC.
+
+As to the above example, with more than 16M of `filename`s, more `:INDEX-BITS` become necessary;
 then the storage vector will need to use an element-type `(UNSIGNED-BYTE 64)`,
 which is not quite as compact, but still reduces GC load, compared to
-some 100'000 or millions of `STRING` instances.
-
-Also, this has a simple deduplication logic built in that can
-be activated by passing a `:dedup-size` and corresponding
-function names in - a vector of that size will get populated
-at hash-based indices with the derived `UDEF`s, allowing
-for quick lookup and avoiding duplicates.
+some 100'000 or millions of `STRING` instances. \
+(Multiplying/shifting the indizes a bit to address a larger backend storage is not implemented yet.)

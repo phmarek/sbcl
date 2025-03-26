@@ -75,6 +75,7 @@
                 udef-inttype-tag)
          (inline udef-inttype-tag))
 (defun udef-inttype-tag (x)
+  ;; TODO: use ldb directly?
   (logand (1- (ash 1 +udef-tag-bits+))
           (udef-inttype-value x)))
 
@@ -94,21 +95,34 @@
             (logior (ash tag sb-vm:n-widetag-bits)
                     udef-inttype-lowtag))))
 
-(declaim (notinline check-tagged-udef-value)
-         (ftype (function ((unsigned-byte #. +udef-tag-bits+)
-                           udef-inttype)
-                          (values (unsigned-byte #. +udef-usable-remaining-bits+)))
-                check-tagged-udef-value))
-(defun check-tagged-udef-value (tag udef)
+(declaim (inline is-tagged-udef-value)
+         (ftype (function ((unsigned-byte #. +udef-tag-bits+) T)
+                          (values (or (unsigned-byte #. +udef-usable-remaining-bits+)
+                                      null)))
+                is-tagged-udef-value))
+
+(defun is-tagged-udef-value (tag udef)
+  "If UDEF is a UDEF and tagged as TAG, return its value."
+  (declare (optimize (speed 3) (debug 0) (safety 1)))
   (let* ((v (sb-kernel:get-lisp-obj-address udef))
          (want (logior (ash tag sb-vm:n-widetag-bits)
                        udef-inttype-lowtag))
          (have (ldb (byte +udef-reserved-low-bits+ 0)
                     v)))
-    (unless (= want have)
-      (error "need a udef with tag ~d, not a ~s" tag udef))
-    (ldb (byte +udef-usable-remaining-bits+ +udef-reserved-low-bits+)
-         v)))
+    (when (= want have)
+      (ldb (byte +udef-usable-remaining-bits+ +udef-reserved-low-bits+)
+           v))))
+
+(declaim (inline check-tagged-udef-value)
+         (ftype (function ((unsigned-byte #. +udef-tag-bits+)
+                           udef-inttype)
+                          (values (unsigned-byte #. +udef-usable-remaining-bits+)))
+                check-tagged-udef-value))
+
+(defun check-tagged-udef-value (tag udef)
+  (declare (optimize (speed 3) (debug 0) (safety 1)))
+  (or (is-tagged-udef-value tag udef)
+      (error "need a udef with tag ~d, not a ~s" tag udef)))
 
 (declaim (ftype (function (T)
                           (values symbol
@@ -218,8 +232,9 @@
                 (declaim (inline ,typep-fn)
                          (ftype (function (T) (member t nil)) ,typep-fn))
                 (defun ,typep-fn (x)
-                  (and (udef-inttype-p x)
-                       (= ,id (udef-inttype-tag x))))
+                  (declare (optimize (speed 3) (debug 0) (safety 0)))
+                  (when (is-tagged-udef-value ,id x)
+                    t))
                 ;; From integer (index) to UDEF.
                 ;; An incoming NIL gets translated to -1, if so allowed.
                 (declaim (inline ,to-udef-fn)
@@ -233,12 +248,11 @@
                   (declare (optimize (speed 3) (debug 1) (safety 1))
                            (type (or null
                                      (unsigned-byte ,max-bits)) x))
-                  (make-udef-inttype (logior ,id
-                                             (ash (if (and ,(and nil-as-minus-1 t)
-                                                           (eq x nil))
-                                                      ,mask
-                                                      x)
-                                                  +udef-tag-bits+))))
+                  (make-twice-tagged-udef ,id
+                                          (if (and ,(and nil-as-minus-1 t)
+                                                        (eq x nil))
+                                                   ,mask
+                                                   x)))
                 ;; From a (boxed) UDEF to an integer (index).
                 ;; A stored -1 may get translated to NIL.
                 ;; When initializing a typed slot or array, an incoming
@@ -300,6 +314,15 @@
 
 (sb-ext:define-hash-table-test udef-eq hash-udef)
 
+
+(defmethod print-object ((obj sb-int:udef-inttype) stream)
+  (let* ((v (sb-kernel:get-lisp-obj-address obj))
+         (utag (ldb (byte +udef-tag-bits+ sb-vm:n-widetag-bits) v)))
+    (format stream "#<UDEF #x~x~@[; tagged #x~x~]~@[, a ~s~]>"
+            (ash v (- +udef-reserved-low-bits+))
+            utag
+            (and *udef-types*
+                 (aref *udef-types* utag)))))
 
 ;; TODO: (udef-tag-p udef tag) with compiler-macro
 

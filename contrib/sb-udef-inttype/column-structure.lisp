@@ -52,18 +52,12 @@
 (in-package :sb-udef-inttype)
 
 
-(declaim (optimize sb-c:instrument-consing))
-
-
 ;; Sizing heuristics for parallel allocation in threads
 (defun default-batch-size (guess)
   (expt 2 (ceiling (log guess 2) 4/3)))
 
-;; for ATOMIC-INCF to work, this must be a structure.
-;; The slot names (rather their initargs) might collide with ones our users choose, sadly...
 (defstruct (udef-c-s-metadata
-             (:conc-name cs-meta-)
-             )
+             (:conc-name cs-meta-))
   (udef            nil :type symbol      :read-only t)
   (next              0 :type sb-vm:word)
   (allocated         0 :type sb-vm:word)
@@ -77,82 +71,109 @@
   (lock            (sb-thread:make-mutex :name "c-s-upper-lock")
                        :type sb-thread:mutex
                        :read-only t)
+  ;; Slot defining the length for variable-length slots
+  (var-len-slot    nil :type t           :read-only t)
   (slots           nil :type vector      :read-only t)
+  ;; use a separate list?
+  ;; initargs must be in correct order in case one value references another,
+  ;; but apart from that there's no order needed?
+  ; (imm-slots       nil :type list        :read-only t)
   (data-vec        #() :type simple-vector :read-only t))
 
-(defclass cs-slot ()
-  ((index         :initform 0   :initarg :index        :type fixnum        :reader cs-s-index        )
-   (slot-name     :initform nil :initarg :slot-name    :type symbol        :reader cs-s-slot-name    )
+
+(defun find-slot-by-name (c-s slot-name)
+  (find slot-name
+        (if (consp c-s)
+            c-s
+            (cs-meta-slots (if (symbolp c-s)
+                               (get-cs-metadata-from-symbol c-s)
+                               c-s)))
+        :test #'eq
+        :key #'cs-s-slot-name))
+
+;; -----
+
+(defclass cs-slot-common ()
+  ((slot-name     :initform nil :initarg :slot-name    :type symbol        :reader cs-s-slot-name    )
    (accessor-sym  :initform nil :initarg :accessor-sym :type symbol        :reader cs-s-accessor-sym )
-   ;; User-supplied data
    (orig-type     :initform nil :initarg :orig-type    :type t             :reader cs-s-orig-type    )
+   ;; User-supplied data
    (init-fn       :initform nil :initarg :init-fn      :type t             :reader cs-s-init-fn      )
    (init-form     :initform nil :initarg :init-form    :type t             :reader cs-s-init-form    )))
 
-(defclass cs-s-array  (cs-slot)
-  ;; vectors can be serialized
-  ((array-dim     :initform   0 :initarg :array-dim     :type sb-int:index  :reader cs-s-array-dim    )
-   (array-el-type :initform nil :initarg :array-el-type :type t             :reader cs-s-array-el-type)))
+(defclass cs-mixin-vector-storage-slot ()
+  ((index         :initform 0   :initarg :index        :type fixnum        :reader cs-s-index        )))
 
-(defclass cs-s-udef (cs-slot)
-  ((udef-sym      :initform nil :initarg :udef-sym      :type symbol        :reader cs-s-udef-sym     )
-   (u-slot-type   :initform nil :initarg :u-slot-type   :type list          :reader cs-s-u-slot-type  )
+(defclass cs-mixin-array ()
+  ((array-el-type    :initform nil :initarg :array-el-type :type t :reader cs-s-array-el-type)
+   (single-init-form :initform nil :initarg :s-init-form   :type t :reader cs-s-single-init-form)
+   (single-init-fn   :initform nil :initarg :s-init-fn     :type t :reader cs-s-single-init-fn)))
+
+(defclass cs-mixin-fixed-size-array (cs-mixin-array cs-mixin-vector-storage-slot cs-slot-common)
+  ;; Fixed-size vectors can be serialized into a (multiple-sized) vector
+  ((fixed-len      :initform 0   :initarg :fixed-len       :type sb-int:index :reader cs-s-array-fixed-len)))
+
+(defclass cs-mixin-variable-sized-array (cs-mixin-array cs-mixin-vector-storage-slot cs-slot-common)
+   ;; variable for variable length
+  ((len-var       :initform nil :initarg :array-len-var :type t             :reader  cs-s-array-len-var)))
+
+(defclass cs-mixin-udef ()
+  ((udef-sym      :initform nil :initarg :udef-sym      :type symbol        :reader cs-s-udef-sym)
+   ;; TODO drop?
+   (u-slot-type   :initform nil :initarg :u-slot-type   :type list          :reader cs-s-u-slot-type)
    ))
 
-(defclass cs-s-udef-vector (cs-s-array cs-s-udef)
-  ;; NIY
+(defclass cs-mixin-immediate ()
+  ((start         :initform  -1 :initarg :start         :type fixnum        :accessor cs-s-bit-start)
+   (count         :initform   0 :initarg :count         :type fixnum        :reader cs-s-bit-count)
+   (ldb           :initform nil :initarg :ldbs          :type list          :accessor cs-s-ldb)
+   ))
+
+(defclass cs-mixin-udef-array (cs-mixin-array cs-mixin-udef)
   ())
 
+(defclass cs-mixin-unsigned-byte ()
+  ())
 
-(defmacro load-time-slot-vector (sym)
-  `(load-time-value (cs-meta-data-vec
-                      (get-cs-metadata-from-symbol ,sym))))
+;; -----
 
-(defmacro load-time-col-struct (sym)
-  `(load-time-value (get-cs-metadata-from-symbol ,sym)))
+(defclass cs-any-type-slot (cs-slot-common cs-mixin-vector-storage-slot)
+  ())
 
-(defmacro load-time-udef-struct (sym)
-  `(load-time-value
-     (get-udef-metadata-from-symbol ,sym)))
+(defclass cs-udef-ref-slot (cs-mixin-udef cs-slot-common cs-mixin-vector-storage-slot)
+  ())
 
+(defclass cs-s-udef-fix-array (cs-mixin-udef-array cs-mixin-fixed-size-array)
+  ())
 
-(defmethod cs-s-array-dim ((slot cs-slot))
+(defclass cs-s-udef-var-array (cs-mixin-udef-array cs-mixin-variable-sized-array)
+  ())
+
+;; actually for type T?
+(defclass cs-s-ub-fix-array (cs-mixin-unsigned-byte cs-mixin-fixed-size-array)
+  ())
+
+;; actually for type T?
+(defclass cs-s-ub-var-array (cs-mixin-unsigned-byte cs-mixin-variable-sized-array )
+  ())
+
+(defclass cs-s-imm-udef (cs-mixin-udef cs-mixin-immediate cs-slot-common)
+  ())
+
+(defclass cs-s-imm-ub (cs-mixin-immediate cs-slot-common)
+  ())
+
+(defmethod cs-s-slot-name ((obj (eql nil)))
   nil)
 
-(defgeneric cs-s-storage-type (item)
-  (:documentation
-   "Returns the _storage_ type for ITEM.")
-  (:method ((slot cs-slot))
-    (cs-s-orig-type slot))
-  (:method ((slot cs-s-array))
-    (cs-s-array-el-type slot))
-  (:method ((u udef-metadata))
-    `(unsigned-byte
-       ,(udef-metadata-max-bits u)))
-  (:method ((s symbol))
-    (cs-s-storage-type
-      (get-udef-metadata-from-symbol s)))
-  (:method ((slot cs-s-udef))
-    (cs-s-storage-type (cs-s-udef-sym slot))))
+(defmethod print-object ((obj cs-slot-common) stream)
+  (print-unreadable-object (obj stream :type t :identity nil)
+    (format stream "~@[~d = ~]~s"
+            (when (typep obj 'cs-mixin-vector-storage-slot)
+              (cs-s-index obj))
+            (cs-s-slot-name obj))))
 
-(defgeneric cs-s-input-type (item)
-  (:documentation
-   "Returns the _input_ type for ITEM.")
-  (:method ((slot cs-slot))
-    (cs-s-orig-type slot))
-  (:method ((slot cs-s-udef))
-    `(or ,(cs-s-orig-type slot)
-         null)))
-
-(defgeneric single-initial-element (slot)
-  (:method ((slot cs-slot))
-    (funcall (cs-s-init-fn slot)))
-  (:method ((slot cs-s-udef))
-    (funcall (udef-metadata-store-udef
-               (get-udef-metadata-from-symbol (cs-s-udef-sym slot)))
-             (funcall (cs-s-init-fn slot))))
-  (:method ((slot cs-s-array))
-    (aref (call-next-method) 0)))
+;; ------------------------------------------------------------
 
 (defun get-udef-metadata-from-symbol (sym)
   (let ((v (and
@@ -176,10 +197,139 @@
      (values sym
              (get-udef-metadata-from-symbol (cs-meta-udef sym))))))
 
+
+(defmacro load-time-slot-vector (sym)
+  `(load-time-value (cs-meta-data-vec
+                      (get-cs-metadata-from-symbol ,sym))))
+
+(defmacro load-time-col-struct (sym)
+  `(load-time-value (get-cs-metadata-from-symbol ,sym)))
+
+(defmacro load-time-udef-struct (sym)
+  `(load-time-value
+     (get-udef-metadata-from-symbol ,sym)))
+
+
+;; ------------------------------------------------------------
+
+(defgeneric cs-s-array-length-spec (slot)
+  (:method ((slot cs-mixin-fixed-size-array))
+    (cs-s-array-fixed-len slot))
+  (:method ((slot cs-mixin-variable-sized-array))
+    '*))
+
+(defgeneric array-slot-index-multiplier (slot)
+  (:method ((slot cs-mixin-fixed-size-array))
+    (cs-s-array-fixed-len slot))
+  (:method (slot)
+    1))
+
+
+(defgeneric cs-s-storage-type (item)
+  (:documentation
+   "Returns the _storage_ type for ITEM.")
+  (:method ((slot (eql nil)))
+    (error "No storage for NIL"))
+  (:method ((slot cs-slot-common))
+    (cs-s-orig-type slot))
+  (:method ((slot cs-mixin-udef))
+    #+(or)
+    (cs-s-storage-type
+      (cs-s-udef-sym slot))
+    (cs-s-u-slot-type slot))
+  (:method ((u udef-metadata))
+    `(unsigned-byte
+       ,(udef-metadata-max-bits u)))
+  (:method ((slot cs-mixin-immediate))
+    (error "no storage for immediate"))
+  (:method ((slot cs-mixin-array))
+    (cs-s-array-el-type slot)))
+
+(defgeneric cs-s-input-type (item)
+  (:documentation
+   "Returns the _input_ type for ITEM.")
+  (:method :around ((slot cs-mixin-array))
+    `(array ,(cs-s-array-el-type slot)
+            (, (cs-s-array-length-spec slot))))
+  (:method ((slot cs-mixin-array))
+    (cs-s-array-el-type slot))
+  (:method ((slot cs-any-type-slot))
+    (cs-s-orig-type slot))
+  (:method ((slot cs-mixin-immediate))
+    `(unsigned-byte ,(cs-s-bit-count slot)))
+  (:method ((slot cs-mixin-udef))
+    `(or ,(cs-s-udef-sym slot)
+         null)))
+
+(defgeneric single-initial-element (slot)
+  (:method ((slot cs-slot-common))
+    (funcall (cs-s-init-fn slot)))
+  (:method ((slot cs-mixin-udef))
+    (let* ((udef (cs-s-udef-sym slot))
+           (u-meta (get-udef-metadata-from-symbol udef))
+           (store-fn (udef-metadata-store-udef u-meta)))
+      (funcall store-fn
+               (funcall (cs-s-init-fn slot)))))
+  (:method ((slot cs-mixin-array))
+   (funcall (cs-s-single-init-fn slot))))
+
+
 ;(declaim (inline get-new-id-range))
-(defun get-new-id-range (obj &optional (count 1))
-  (sb-ext:atomic-incf (cs-meta-next obj)
-                      count))
+(defun get-new-id-range (obj &optional count)
+  "Returns the _old_ value, before incrementing"
+  (let* ((count (or count 1)))
+    (cond
+       ;; Single-level allocation or one element only.
+       ;; Maybe needs resizing; the constructor will do that.
+      ((or (= count 1)
+           (not (cs-meta-batch-size obj)))
+       (sb-ext:atomic-incf (cs-meta-next obj) count))
+      ;; Check allocation constraint
+      ((< (cs-meta-batch-size obj) count)
+       (error "Allocation ~d larger than batch size ~s for ~s"
+              count
+              (cs-meta-batch-size obj)
+              (cs-meta-udef obj)))
+      ;; Find a suitable position.
+      (t
+       ;; Straight allocation would get split over two batches?
+       ;; We can't allow that.
+       (dotimes (i 15)
+         (let* ((cur (cs-meta-next obj))
+                (position-within-batch (mod cur (cs-meta-batch-size obj)))
+                (next-pos (+ position-within-batch count)))
+           (if (< next-pos (cs-meta-batch-size obj))
+               ;; Get current position
+               (let ((chg (sb-ext:compare-and-swap (cs-meta-next obj)
+                                                   cur
+                                                   next-pos)))
+                 (if (= chg cur)
+                     (return-from get-new-id-range cur)
+                     ;; Else raced, retry.
+                     nil))
+               ;; Doesn't fit into begun batch.
+               (let* ((next-batch (+ cur
+                                     (- position-within-batch)
+                                     (cs-meta-batch-size obj)))
+                      (allocation-end (+ next-batch count)))
+                 ;; Try to get that position
+                 (let ((chg (sb-ext:compare-and-swap (cs-meta-next obj)
+                                                     cur
+                                                     allocation-end)))
+                   (when (= chg cur)
+                     (return-from get-new-id-range next-batch)))))))
+       (error "can't get new allocation for ~s even after a few retries. broken logic?"
+              (cs-meta-udef obj))))))
+
+(define-compiler-macro get-new-id-range (&whole whole obj &optional count)
+  (if (or (and (constantp count)
+               (numberp count)
+               (= count 1))
+          (null count))
+      `(sb-ext:atomic-incf (cs-meta-next ,obj))
+      whole))
+
+;; ------------------------------------------------------------
 
 (declaim (ftype (function (t) (sb-int:index)) column-struct-size))
 (defun column-struct-size (obj)
@@ -229,7 +379,7 @@
   "Resizes to (at least) NEW-SIZE.
   Calls concurrency-unsafe ADJUST-ARRAY for a single-level column-struct,
   or adds/removes batches for a two-level column-struct."
-  (declare (optimize (sb-c:instrument-consing 0)))
+  ;(declare (optimize (sb-c:instrument-consing 0)))
   (sb-thread:with-mutex ((cs-meta-lock c-s))
     (sb-vm:without-arena
       (cond
@@ -245,7 +395,7 @@
              ;; TODO: CAS? shouldn't happen concurrently with allocations?
              (setf (cs-meta-next c-s)
                    (min (cs-meta-next c-s)
-                   new-size))
+                        new-size))
              (setf (cs-meta-allocated c-s)
                    new-size)
              (sb-vm:%write-barrier)
@@ -261,42 +411,36 @@
                                   (ceiling new-size (cs-meta-batch-size c-s))
                                   new-size)))
            (loop for slot-def across (cs-meta-slots c-s)
-                 for slot-vec across (cs-meta-data-vec c-s)
-                 for slot-nr = (cs-s-index slot-def)
-                 for orig-type = (cs-s-orig-type slot-def)
-                 ;for slot-type = (or (cs-s-trslt-type slot-def)
-                 ;                    (cs-s-array-el-type slot-def)
-                 ;                    orig-type
-                 ;                    (error "No type"))
-                 for slot-type = (cs-s-storage-type slot-def)
-                 for elem-per-slot = (or (cs-s-array-dim slot-def)
-                                         1)
-                 for init-val = (funcall (cs-s-init-fn slot-def))
-                 for new-elements = (- new-vec-size (array-dimension slot-vec 0))
-                 do (setf (aref (cs-meta-data-vec c-s)
-                                slot-nr)
-                          (if 2-level?
-                              ;; create a number of batches
-                              (let* ((new (loop repeat new-elements
-                                                collect (make-array (* elem-per-slot
-                                                                       (cs-meta-batch-size c-s))
-                                                                    :element-type slot-type
-                                                                    :adjustable nil
-                                                                    :fill-pointer nil
-                                                                    :displaced-to nil
-                                                                    :initial-element (single-initial-element slot-def)
-                                                                    )))
-                                     (data (concatenate 'list slot-vec new)))
-                                (make-array new-vec-size
-                                            :element-type (array-element-type slot-vec)
-                                            :initial-contents data))
-                              (let* ((new (make-list (* elem-per-slot new-elements)
-                                                     :initial-element (single-initial-element slot-def)))
-                                     (data (concatenate 'list slot-vec new)))
-                                (make-array (* elem-per-slot
-                                               new-vec-size)
-                                            :element-type slot-type
-                                            :initial-contents data)))))
+                 when (typep slot-def 'cs-mixin-vector-storage-slot)
+                 do (let* ((slot-nr (cs-s-index slot-def))
+                           (slot-vec (aref (cs-meta-data-vec c-s) slot-nr))
+                           (slot-type (cs-s-storage-type slot-def))
+                           (elem-per-slot (array-slot-index-multiplier slot-def))
+                           (new-elements (- new-vec-size (array-dimension slot-vec 0))))
+                      (setf (aref (cs-meta-data-vec c-s)
+                                  slot-nr)
+                            (if 2-level?
+                                ;; create a number of batches
+                                (let* ((new (loop repeat new-elements
+                                                  collect (make-array (* elem-per-slot
+                                                                         (cs-meta-batch-size c-s))
+                                                                      :element-type slot-type
+                                                                      :adjustable nil
+                                                                      :fill-pointer nil
+                                                                      :displaced-to nil
+                                                                      :initial-element (single-initial-element slot-def)
+                                                                      )))
+                                       (data (concatenate 'list slot-vec new)))
+                                  (make-array new-vec-size
+                                              :element-type (array-element-type slot-vec)
+                                              :initial-contents data))
+                                (let* ((new (make-list (* elem-per-slot new-elements)
+                                                       :initial-element (single-initial-element slot-def)))
+                                       (data (concatenate 'list slot-vec new)))
+                                  (make-array (* elem-per-slot
+                                                 new-vec-size)
+                                              :element-type slot-type
+                                              :initial-contents data))))))
            (sb-vm:%write-barrier)
            (setf (cs-meta-allocated c-s)
                  (if 2-level?
@@ -331,6 +475,7 @@
           (column-struct-resize obj new-initial-size))
         new-initial-size)))
 
+;; ------------------------------------------------------------
 
 (defun return-batch-macro (col-struct macro-name
                                       constructor arg-list args)
@@ -358,28 +503,50 @@
                            (setf id ,',next))
                          (incf ,',next)
                          (decf ,',left)
-                         (,',constructor ,',data-var id ,@', args))))
+                         (,',constructor id ,@', args))))
               (locally
                 ,@ body)))))))
 
+;; ------------------------------------------------------------
+
 (defun parse-slot (input)
   (declare (sb-ext:muffle-conditions style-warning))
-  (destructuring-bind (name &optional init &key (type t))
+  (destructuring-bind (name &optional init &key (type t) (allocation :default))
       (sb-int:ensure-list input)
-    (values name init type)))
+    (values name init type allocation)))
 
 (defun is-simple-1dim-array (type)
   (ignore-errors
     ;; restricted to a subset of possible array-types
     (destructuring-bind (kind element-type (dimension)) type
-      (when (and (member kind '(array simple-array))
-                 (numberp dimension))
+      (when (member kind '(array simple-array))
         (multiple-value-bind (c-s element-udef)
             (get-cs-metadata-from-symbol element-type)
           (declare (ignore c-s))
           (list element-type
                 dimension
                 element-udef))))))
+
+(defmethod wrappers-for-value-translation (slot)
+  (list 'identity 'identity))
+
+(defmethod wrappers-for-value-translation ((slot cs-mixin-udef))
+  (wrappers-for-value-translation
+    (get-udef-metadata-from-symbol
+      (cs-s-udef-sym slot))))
+
+(defmethod wrappers-for-value-translation ((udef sb-impl:udef-metadata))
+  (list (sb-impl:udef-metadata-retr-udef udef)
+        (sb-impl:udef-metadata-store-udef udef)))
+
+
+(defvar *slot-nr* nil
+  "Used to number the slots during parsing")
+(defvar *bit-index* nil
+  "Used to count used immediate bits during parsing")
+(defvar *current-cs-sym* nil
+  "The symbol we're defining a C-S on.")
+
 
 ;; Getters --------------------------------------------------
 ;;
@@ -390,206 +557,360 @@
 ;;   It allows an unknown number of values, consider using
 ;;     (VALUES SB-INT:UDEF-INTTYPE &OPTIONAL).
 
-(defmethod cs-getter-fn-form (struct-name (slot cs-slot))
+(defmethod getter-and-setter-functions ((slot cs-mixin-immediate) cs)
+  (declare (ignore cs))
+  (destructuring-bind (getter setter) (wrappers-for-value-translation slot)
+    (with-slots (accessor-sym slot-name) slot
+      `((,accessor-sym (id)
+           (declare (optimize (speed 3) (safety 1) (debug 1))
+                    (type ,*current-cs-sym* id))
+           (,getter (ldb ',(cs-s-ldb slot)
+                         (sb-kernel:get-lisp-obj-address id))))
+        ((setf ,accessor-sym) (new place)
+           (declare (optimize (speed 3) (safety 1) (debug 1))
+                    (type ,*current-cs-sym* place))
+           ;; TODO: No setter function for immediate slots -
+           ;; they're used to _address_ data and so can't be changed afterwards??!
+           (let ((raw (sb-kernel:get-lisp-obj-address place)))
+             (setf (ldb ',(cs-s-ldb slot) raw)
+                   (,setter new))
+             (setf place
+                   (sb-kernel:%make-lisp-obj raw)))
+           new)))))
+
+
+(defun setup-slot-vector-addressing (c-s slot input vec-name vec-index-sym body-form)
+  (let ((input-udef-def  (get-udef-metadata-from-symbol
+                           (cs-meta-udef c-s))))
+    (sb-int:with-unique-names (iidx input-index slots-vec batch-var batch-idx inner-idx)
+      `(let* ((,iidx ,input)
+              (,input-index (cond ((,(udef-metadata-type-p input-udef-def) ,iidx)
+                                   (,(cs-s-accessor-sym
+                                       (aref (cs-meta-slots c-s)
+                                             0))
+                                     ,iidx))
+                                  (t
+                                   (error "wrong input ~s, expect ~s udef"
+                                          ,iidx ',(cs-meta-udef c-s))))))
+         (multiple-value-bind (,batch-idx ,inner-idx)
+             ;; TODO: batch-size changeable during runtime?
+             ,(if (cs-meta-batch-size c-s)
+                  `(floor ,input-index ,(cs-meta-batch-size c-s))
+                  `(values nil ,input-index))
+           (declare (ignorable ,batch-idx))
+           (let* ((,slots-vec (load-time-slot-vector ',*current-cs-sym*))
+                  (,batch-var (aref ,slots-vec ,(cs-s-index slot)))
+                  ;; (the T ; ,element-vec-type TODO )
+                  (,vec-name ,(if (cs-meta-batch-size c-s)
+                                  `(aref ,batch-var ,batch-idx)
+                                  `,batch-var))
+                  (,vec-index-sym (* ,inner-idx
+                                     ,(array-slot-index-multiplier slot))))
+             (declare (ignorable ,vec-name))
+             ;(declare (type (simple-array ,element-vec-type (*))))
+             , body-form))))))
+
+
+(defmethod getter-and-setter-functions ((slot cs-mixin-array) cs)
   (with-slots (accessor-sym slot-name) slot
-  `(defun ,accessor-sym (id)
-     (declare (optimize (speed 3) (safety 1) (debug 1))
-              (type ,struct-name id))
-     (with-c-s-slots (,struct-name id) (,slot-name)
-       (values ,slot-name)))))
+    (destructuring-bind (reader store) (wrappers-for-value-translation slot)
+      `((,accessor-sym (id &key start end index (mode :displaced))
+        (declare (optimize (speed 3) (safety 1) (debug 3))
+                 (type ,*current-cs-sym* id))
+        ,(setup-slot-vector-addressing
+           (get-cs-metadata-from-symbol *current-cs-sym*)
+           slot 'id 'vec 'idx
+           `(let ((max-len ,(get-length-of-array-slot-form slot cs 'id)))
+              (assert (typep index `(or null
+                                        (integer 0 ,max-len))))
+              (assert (typep start `(or null
+                                       (integer 0 ,max-len))))
+              (assert (typep end `(or null
+                                     (integer ,(or start 0) ,max-len))))
+              (if index
+                  (values (,reader
+                            (aref vec (+ idx index))))
+                  (let* ((real-start (+ idx (or start 0)))
+                         (real-end (+ idx (or end max-len)))
+                         (len (- real-end real-start)))
+                    (ecase mode
+                      (:displaced
+                       (values
+                         ,(let ((backend-data `(make-array len
+                                          :element-type ',(cs-s-storage-type slot)
+                                          :displaced-to vec
+                                          :displaced-index-offset real-start)))
+                            (if (eq 'identity reader)
+                                backend-data
+                                ;; TODO: How to get changes reflected into the original
+                                ;; if there's a translation, eg. for an UDEF??
+                                `(make-array len
+                                             :element-type ',(cs-s-array-el-type slot)
+                                             :initial-contents
+                                             (map 'list #' ,reader ,backend-data))))))
+                      (:subseq
+                       (values
+                         ,(let ((backend-data  `(subseq vec real-start real-end)))
+                            (if (eq 'identity reader)
+                                backend-data
+                                `(map `(array ,',(cs-s-array-el-type slot) ,len)
+                                     #' ,reader ,backend-data)))))))))))
+      ((setf ,accessor-sym) (new id &key start end index)
+        (declare (optimize (speed 3) (safety 1) (debug 3))
+                 (type ,*current-cs-sym* id))
+        ,(setup-slot-vector-addressing
+           (get-cs-metadata-from-symbol *current-cs-sym*)
+           slot 'id 'vec 'idx
+           `(let ((max-len ,(get-length-of-array-slot-form slot cs 'id)))
+              (assert (typep index `(or null
+                                        (integer 0 ,max-len))))
+              (assert (typep start `(or null
+                                        (integer 0 ,max-len))))
+              (assert (typep end `(or null
+                                      (integer ,(or start 0) ,max-len))))
+              (if index
+                  (setf (aref vec (+ index idx))
+                        (,store new))
+                  (let* ((real-start (+ idx (or start 0)))
+                         (real-end (+ idx (or end max-len)))
+                         #+(or)
+                         (len (- real-end real-start)))
+                    (loop for el across new
+                          for i upfrom real-start below real-end
+                          do (setf (aref vec i)
+                                   (,store el)))
+                    #+(or) ;; TODO: with a MAP for translation faster than a loop?
+                    (replace
+                      (make-array len
+                                  :element-type ',(cs-s-storage-type slot)
+                                  :displaced-to vec
+                                  :displaced-index-offset real-start)
+                      new)
+                    new)))))))))
 
-(defmethod cs-getter-fn-form (struct-name (slot cs-s-udef))
-  (with-slots (accessor-sym slot-name) slot
-    `(defun ,accessor-sym (id &key raw?)
-       (declare (optimize (speed 3) (safety 1) (debug 1))
-                (type ,struct-name id))
-       (declare (ignore raw?)) ; TODO
-       (with-c-s-slots (,struct-name id) (,slot-name)
-         ;; TODO raw
-         (values ,slot-name)))))
 
-(defmethod cs-getter-fn-form (struct-name (slot cs-s-array))
-  (with-slots (accessor-sym slot-name) slot
-  `(defun ,accessor-sym (id &key start end index (mode :displaced))
-     (declare (optimize (speed 3) (safety 1) (debug 1))
-              (type ,struct-name id))
-     (declare (ignore mode)) ; TODO
-     (with-c-s-slots (,struct-name id) (,slot-name)
-       (cond
-         (index
-          (values (aref ,slot-name index)))
-         (start
-          ;; TODO: fold into MAKE-ARRAY
-          (values (subseq ,slot-name start end)))
-         (t
-          (values ,slot-name)))))))
+(defmethod getter-and-setter-functions ((slot cs-mixin-vector-storage-slot) cs)
+  (destructuring-bind (reader store) (wrappers-for-value-translation slot)
+    (with-slots (accessor-sym slot-name) slot
+      `((,accessor-sym (id)
+          (declare (optimize (speed 3) (safety 1) (debug 3))
+                   (type ,*current-cs-sym* id))
+          ,(setup-slot-vector-addressing
+             (get-cs-metadata-from-symbol *current-cs-sym*)
+             slot 'id 'vec 'idx
+             `(,reader (aref vec idx))))
+        ((setf ,accessor-sym) (new id)
+          (declare (optimize (speed 3) (safety 1) (debug 3))
+                   (type ,*current-cs-sym* id))
+          ,(setup-slot-vector-addressing
+             (get-cs-metadata-from-symbol *current-cs-sym*)
+             slot 'id 'vec 'idx
+             `(setf (aref vec idx)
+                    (,store new))))))))
 
-;; Setters --------------------------------------------------
-;;
-;; TODO: Type for NEW?
 
-(defmethod cs-setter-fn-form (struct-name (slot cs-slot))
-  (with-slots (accessor-sym slot-name) slot
-    `(defun (setf ,accessor-sym) (new id)
-       (declare (optimize (speed 3) (safety 1) (debug 1))
-                (type ,struct-name id))
-       (with-c-s-slots (,struct-name id) (,slot-name)
-         (setf ,slot-name
-               new)))))
+(defmacro value-before-incf (place &optional (count 1))
+  `(prog1
+       ,place
+     (incf ,place ,count)))
 
-(defmethod cs-setter-fn-form (struct-name (slot cs-s-udef))
-  (with-slots (accessor-sym slot-name) slot
-    `(defun (setf ,accessor-sym) (new id &key raw?)
-       (declare (optimize (speed 3) (safety 1) (debug 1))
-                (type ,struct-name id))
-       (declare (ignore raw?)) ; TODO
-       (with-c-s-slots (,struct-name id) (,slot-name)
-         (setf ,slot-name
-               new)))))
-
-(defmethod cs-setter-fn-form (struct-name (slot cs-s-array))
-  (with-slots (accessor-sym slot-name) slot
-    `(defun (setf ,accessor-sym) (new id &key index)
-       (declare (optimize (speed 3) (safety 1) (debug 1))
-                (type ,struct-name id))
-       (with-c-s-slots (,struct-name id) (,slot-name)
-         (cond
-           (index
-            (setf (aref ,slot-name index)
-                  new))
-           (t
-            ;; TODO: start1, end1, etc.?
-            (replace ,slot-name new)
-            new))))))
-
-(defun get-slot-def (struct-name index input)
-  (multiple-value-bind (name init user-type) (parse-slot input)
+(defun get-slot-def (input)
+  (multiple-value-bind (name init user-type allocation) (parse-slot input)
     (multiple-value-bind (c-s meta) (get-cs-metadata-from-symbol user-type)
       (declare (ignore c-s))
       (destructuring-bind (&optional arr-element-type arr-len arr-udef)
           (is-simple-1dim-array user-type)
-        (multiple-value-bind (type+args)
+        (multiple-value-bind (type+args init-fn-args slot-nr-incr)
             (cond
+              ((eq allocation :immediate)
+               (multiple-value-bind (bits)
+                   (cond
+                     (meta
+                      (udef-metadata-max-bits meta))
+                     ((and (consp user-type)
+                           (eq (first user-type) 'unsigned-byte)
+                           (numberp (second user-type)))
+                      (second user-type))
+                     (t
+                      (error ":ALLOCATION :IMMEDIATE only allowed for (UNSIGNED-BYTE x) or UDEF types")))
+                 (let* ((start (value-before-incf *bit-index* bits)))
+                   (when (> *bit-index*
+                            sb-vm:n-word-bits)
+                     (error ":ALLOCATION :IMMEDIATE slots exceed max bit size (~d > ~d)."
+                            *bit-index* sb-vm:n-word-bits))
+                   (values (list (if meta
+                                     ''cs-s-imm-udef
+                                     ''cs-s-imm-ub)
+                                 :start start
+                                 :count bits
+                                 :ldbs `(byte ,bits ,start))
+                           nil
+                           0))))
+              ((not (eq allocation :default))
+               ;; TODO: allow individual slots to specify 1 or 2 levels?
+               ;; Doesn't make that much sense, does it?
+               (error "Bad :ALLOCATION"))
               (arr-element-type
-               (when arr-udef
-                 (error "Array of UDEFs not implemented yet"))
                ;; TODO: doesn't work on arrays-of-arrays and similar
-               (unless (and (consp init)
-                            (eq (first init) 'make-array))
-                 (setf init
-                       `(make-array (list ,arr-len)
-                                    :element-type ',arr-element-type
-                                    :initial-element ,init)))
-               `('cs-s-array
-                     :array-dim ,arr-len
-                     :array-el-type ',arr-element-type))
+               (let ((var-len (and (symbolp arr-len)
+                                   arr-len)))
+                 (destructuring-bind (reader store) (wrappers-for-value-translation arr-udef)
+                   (declare (ignore reader))
+                   (multiple-value-bind (single-init vec-init)
+                       (cond
+                         ((and (consp init)
+                               (eq (first init) 'make-array))
+                          (destructuring-bind (m-a len &key initial-element initial-contents &allow-other-keys) init
+                            (declare (ignore m-a len))
+                            (when initial-contents
+                              (error "C-S init for :initial-contents NIY, in ~s" *current-cs-sym*))
+                            (values `(,store ,initial-element)
+                                    `(error "not used?? 713")
+                                    init)))
+                         (t
+                          (values `(,store ,init)
+                                  `(make-array
+                                     (list ,arr-len)
+                                     :element-type '(or null ,arr-element-type)
+                                     ;(cs-s-storage-type
+                                     ;                (find-slot-by-name ',*current-cs-sym* ',name))
+                                     :initial-element ,init))))
+                     (values `(,@(if var-len
+                                     (list (if arr-udef
+                                               ''cs-s-udef-var-array
+                                               ''cs-s-ub-var-array)
+                                           :array-len-var `',var-len)
+                                     (list (if arr-udef
+                                               ''cs-s-udef-fix-array
+                                               ''cs-s-ub-fix-array)
+                                           :fixed-len arr-len))
+                                :init-form ',vec-init
+                                :init-fn (lambda ,(when var-len
+                                                    (list var-len))
+                                           ,(when var-len
+                                              `(declare (ignorable ,var-len)))
+                                           ,vec-init)
+                                :s-init-form ',single-init
+                                :s-init-fn (lambda ()
+                                             ,single-init)
+                                :array-dim ,(when (numberp arr-len)
+                                              arr-len)
+                                :array-el-type ',arr-element-type)
+                                (when var-len
+                                  `(,var-len)))))))
               (meta
-                #+(or)
-               (setf init
-                     `(,(udef-metadata-store-udef meta)
-                        ,init))
-               `('cs-s-udef
-                     :udef-sym ',user-type
-                     :u-slot-type ',(cs-s-storage-type meta)))
+               ;; see below!
+               (values `('cs-udef-ref-slot)))
               (t
-               `('cs-slot)))
-        `(make-instance ,@ type+args
-          :index        ,index
-          :slot-name    ',name
-          :accessor-sym ',(sb-int:symbolicate struct-name "-" name)
-          :orig-type    ',user-type
-          :init-form    ',init
-          ;; default
-          :init-fn      (sb-ext:with-current-source-form (',input)
-                          (lambda () ,init))))))))
+               (values `('cs-any-type-slot))))
+          ;;
+          `(make-instance ,@ type+args
+                          ;; for CS-S-UDEF-*-ARRAY or immediate slots
+                          ,@ (when meta
+                               `(:udef-sym ',user-type
+                                 :u-slot-type ',(cs-s-storage-type meta)))
+                          ,@ (when arr-udef
+                               `(:udef-sym ',arr-element-type
+                                 :u-slot-type ',(cs-s-storage-type arr-udef)))
+                          :index        ,(value-before-incf *slot-nr* (or slot-nr-incr 1))
+                          :orig-type    ',user-type
+                          :slot-name    ',name
+                          :accessor-sym ',(sb-int:symbolicate *current-cs-sym* "-" name)
+                          :init-form    ',init
+                          ;; default
+                          :init-fn      (sb-ext:with-current-source-form (',input)
+                                          (lambda , init-fn-args
+                                            (declare (ignore ,@ init-fn-args))
+                                            ,init))
+                          :allow-other-keys t))))))
 
+(defun check-var-len-slots (slots)
+  ;; all slots with same variable length multiple
+  (let ((var-len-args (remove nil
+                              (mapcar (lambda (slot)
+                                        (when (typep slot 'cs-mixin-variable-sized-array)
+                                          (cs-s-array-len-var slot)))
+                                      slots))))
+    (when (> (length var-len-args) 1)
+      (unless (and (apply #'eq var-len-args)
+                   (find-slot-by-name (first var-len-args) slots))
+        (error "All slots with variable length vectors must use the same symbol for the length,~
+               and it must be defined as an slot (possibly with :ALLOCATION :IMMEDIATE).")))
+    (first var-len-args)))
 
-(defun handle-c-s-slots (struct-name slot-input)
-  (loop with new-val = (gensym "NEW-VAL")
-        for s-i in slot-input
-        for i upfrom 0
-        for slot-form = (get-slot-def struct-name i s-i)
-        ;; precedent: (sb-xc:defmacro DEFCLASS) in defclass.lisp
-        for slot = (eval slot-form)
-        for slot-name = (cs-s-slot-name slot)
-        ;;
-        collect slot into slots
-        collect slot-form into slot-forms
-        collect (sb-int:gensymify* slot-name :-INIT) into tmp-names
-        ;;
-        ;; This initarg is user-visible, use supplied value and translate later
-        collect (list slot-name
-                      (cs-s-init-form slot)) into maker-args
-        collect `(check-type ,slot-name
-                             ,(cs-s-input-type slot)) into maker-checks
-        finally (return (values slots slot-forms
-                                maker-args maker-checks
-                                tmp-names))))
+(defun handle-c-s-slots (slot-input)
+  (let ((*bit-index* sb-impl::+udef-reserved-low-bits+)
+        (*slot-nr* 0))
+    (loop with new-val = (gensym "NEW-VAL")
+          for s-i in slot-input
+          for i upfrom 0
+          for slot-form = (get-slot-def s-i)
+          ;; precedent: (sb-xc:defmacro DEFCLASS) in defclass.lisp
+          for slot = (eval slot-form)
+          for slot-name = (cs-s-slot-name slot)
+          ;;
+          collect slot into slots
+          collect slot-form into slot-forms
+          ;;
+          ;; This initarg is user-visible, use supplied value and translate later
+          collect (list slot-name
+                        (cs-s-init-form slot)) into maker-args
+          collect `(check-type ,slot-name
+                               ,(cs-s-input-type slot)) into maker-checks
+          finally (let ((var-len-var (check-var-len-slots slots)))
+                    (return (values slots slot-forms
+                                    maker-args maker-checks
+                                    var-len-var))))))
 
+;; ------------------------------------------------------------
 
-(declaim (notinline ref-udef-vec
-                 (setf ref-udef-vec)))
-
-(defun ref-udef-vec (vec index udef-tag to-nil-value)
-  (let ((v (aref vec index)))
-    (if (= v to-nil-value)
-        nil
-        (sb-impl:make-twice-tagged-udef udef-tag v))))
-
-(defun (setf ref-udef-vec) (new vec index udef-tag to-nil-value)
-  (setf (aref vec index)
-        (if (null new)
-            to-nil-value
-            (sb-impl:check-tagged-udef-value udef-tag new)))
-  new)
-
-
-(defgeneric cs-with-cs-form (cs slot vec idx)
+(defgeneric get-length-of-array-slot-form (slot cs udef)
   (:documentation
-   "Returns a list of bindings, a list of declarations (first one for VEC),
-   a list of FLETs, their declarations, and a SYMBOL-MACROLET body form, as a list."))
+   "For SLOT being used in CS, return a form that specifies
+   the length - an integer or a getter function for variable length.")
+  (:method ((slot cs-mixin-variable-sized-array) cs udef)
+      ;; Use accessor to read length
+      `(,(cs-s-accessor-sym (cs-meta-var-len-slot cs)) ,udef))
+  (:method ((slot cs-mixin-fixed-size-array) cs udef)
+      (cs-s-array-fixed-len slot)))
 
-(defmethod cs-with-cs-form (cs (slot cs-slot) vec idx)
-  `(()
-    ((type (simple-array ,(cs-s-orig-type slot) (*)) ,vec))
-    ()
-    ()
-    (aref ,vec ,idx)))
+(defmethod create-form-for_with-cs (cs udef-input name (slot cs-mixin-immediate) body)
+  (let ((fn (sb-int:gensymify* (cs-s-slot-name slot)))
+        (typep-fn (sb-impl:udef-metadata-type-p
+                    (get-udef-metadata-from-symbol
+                      (cs-meta-udef cs))))
+        (slot-udef (get-udef-metadata-from-symbol (cs-s-udef-sym slot))))
+    (declare (ignore slot-udef))
+    `(flet
+         ((,fn ()
+            (cond
+              ;; For correct udef extract
+              ((,typep-fn ,udef-input)
+               (ldb ,(cs-s-ldb slot)
+                    (sb-kernel:get-lisp-obj-address ,udef-input)))
+              ;; fetch from UNSIGNED-BYTE value
+              ((typep ,udef-input ',(cs-s-storage-type cs))
+               ;; Repair start position: in untagged integer further to the LSB
+               (ldb ,(destructuring-bind (typ l s) (cs-s-ldb slot)
+                       (list typ l (- s sb-impl::+udef-reserved-low-bits+)))
+                    (sb-kernel:get-lisp-obj-address ,udef-input))))
+            ((setf ,fn) (new)
+                        (if (,typep-fn ,udef-input)
+                            (setf (ldb ,(cs-s-ldb slot) ,udef-input)
+                                  new)
+                            (error "SETF of immediate slots only for UDEFs.")))))
+       (symbol-macrolet ((,name () (,fn)))
+         ,@ body))))
 
-(defmethod cs-with-cs-form (cs (slot cs-s-array) vec idx)
-  (sb-int:with-unique-names (scaled-idx fn content)
-    `(((,scaled-idx (* ,idx ,(cs-s-array-dim slot)))
-       (,content (make-array (list ,(cs-s-array-dim slot))
-                  :element-type ',(cs-s-array-el-type slot)
-                  :displaced-to ,vec
-                  :displaced-index-offset ,scaled-idx)))
-      ((type (simple-array ,(second
-                              (cs-s-orig-type slot))
-                           (*))
-             ,vec))
-      ((,fn ()
-            ,content)
-       ((setf ,fn) (new)
-                   (replace ,content new)))
-      ((ignorable (function (setf ,fn)))
-       (ignorable (function ,fn)))
-      (,fn)
-      )))
-
-(defmethod cs-with-cs-form (cs (slot cs-s-udef) vec idx)
-  `(()
-    ((type (simple-array ,(cs-s-u-slot-type slot) (*)) ,vec))
-    ()
-    ()
-    ;; TODO: always translates to/from NIL
-    (ref-udef-vec ,vec ,idx
-                  ,(sb-impl:udef-metadata-udef-id
-                     (get-udef-metadata-from-symbol
-                       (cs-s-udef-sym slot)))
-                  ,(1- (ash 1
-                            (udef-metadata-max-bits
-                              (get-udef-metadata-from-symbol
-                                (cs-s-udef-sym slot))))))))
+#+(or)
+(defmethod create-form-for_with-cs (cs udef-input name (slot cs-s-imm-udef) body)
+  (let ((to-storage (sb-int:gensymify* (cs-s-slot-name slot) :-store))
+        (from-storage (sb-int:gensymify* (cs-s-slot-name slot) :-read))
+        (sym (gensym)))
+    (call-next-method cs udef-input sym slot
+                      `(flet ( ,@(wrappers-for-value-translation slot to-storage from-storage)
+                               (symbol-macrolet ((,name ,sym))
+                                 ,@body))))))
 
 
 ;; Hook into CL:WITH-SLOTS?
@@ -599,18 +920,20 @@
   at INDEX (which can resp. should be a UDEF).
   NAMES can be a list of slot names or a list of (SYM SLOT)."
   (multiple-value-bind (c-s def) (get-cs-metadata-from-symbol udef-name t)
-    (sb-int:with-unique-names (val iidx slots-vec batch-idx inner-idx c-s-var)
+    (sb-int:with-unique-names (iidx val slots-vec batch-idx inner-idx c-s-var)
       `(let* ((,iidx ,index)
               (,val (cond
-                      ((numberp ,iidx)
-                       ,iidx)
                       ((,(udef-metadata-type-p def) ,iidx)
-                       (,(udef-metadata-store-udef def) ,iidx))
-                      (t (error "wrong input ~s, expect ~s udef"
-                                ,iidx ',(cs-meta-udef c-s)))))
+                        (,(cs-s-accessor-sym
+                            (aref (cs-meta-slots c-s)
+                                  0))
+                          ,iidx))
+                      (t
+                        (error "wrong input ~s, expect ~s udef"
+                               ,iidx ',(cs-meta-udef c-s)))))
               (,c-s-var (load-time-col-struct ',udef-name))
               (,slots-vec (load-time-slot-vector ',udef-name)))
-         (declare (ignorable ,c-s-var))
+         (declare (ignorable ,c-s-var ,slots-vec))
          (unless (typep ,val ',(cs-s-storage-type def))
            (error "Bad index value ~s, wanted a ~s for ~s"
                   ,val
@@ -620,39 +943,39 @@
              ,(if (cs-meta-batch-size c-s)
                 `(floor ,val (cs-meta-batch-size ,c-s-var))
                 `(values nil ,val))
-           (declare (ignorable ,batch-idx))
-           ,(loop for entry in names
+           (declare (ignorable ,batch-idx ,inner-idx))
+           ,(loop with content = `(progn ,@ body)
+                  ;; "inner to outer" means (reverse names),
+                  ;; but it shouldn't make a difference
+                  for entry in (reverse names)
                   for e-list = (sb-int:ensure-list entry)
                   for var-name = (first e-list)
                   for slot-name = (or (second e-list) var-name)
-                  for slot = (or (find slot-name
-                                       (cs-meta-slots c-s)
-                                       :test #'eq
-                                       :key #'cs-s-slot-name)
+                  for slot = (or (find-slot-by-name c-s slot-name)
                                  (error "Invalid slot name ~s" slot-name))
-                  for batch-var = (sb-int:gensymify* slot-name :-batch)
-                  for vec-var = (sb-int:gensymify* slot-name :-data-vec)
-                  for (lets% decls% flets% fdecls% body%) = (cs-with-cs-form c-s slot vec-var inner-idx)
-                  for element-vec-type = (second (first decls%))
-                  collect `(,vec-var (the ,element-vec-type
-                                          (let ((,batch-var (aref ,slots-vec ,(cs-s-index slot))))
-                                            ,@(if (cs-meta-batch-size c-s)
-                                                `((declare (type (simple-array ,element-vec-type (*))
-                                                                 ,batch-var))
-                                                  (aref ,batch-var ,batch-idx))
-                                                  `(,batch-var))))) into lets
-                  appending lets% into lets
-                  appending decls% into decls
-                  appending flets% into flets
-                  appending fdecls% into fdecls
-                  collect `(,var-name ,body%) into s-macros
-                  finally (return
-                            `(let* ,lets
-                               (declare ,@ decls)
-                               (flet , flets
-                                 (declare ,@ fdecls)
-                                 (symbol-macrolet ,s-macros
-                                   ,@body))))))))))
+                  for fn = (sb-int:gensymify* var-name :-fn)
+                  ;for form = (create-form-for_with-cs c-s iidx
+                  ;                                    var-name
+                  ;                                    slot
+                  ;                                    content)
+                  for form = `(symbol-macrolet
+                                  ;; Must access the original place because of immediate slots!
+                                  ;; TODO: warn on side-effects?
+                                  ((,var-name (,(cs-s-accessor-sym slot) ,index)))
+                                , content)
+                  do (setf content form)
+                  finally (return form)))))))
+
+
+;; ------------------------------------------------------------
+
+(defun make-udef-with-immediate-slots-form (to-udef-sym slots)
+  `(,to-udef-sym (logior
+                   ,@ (loop for slot in slots
+                            when (typep slot 'cs-mixin-immediate)
+                            collect `(ash ,(cs-s-slot-name slot)
+                                          ,(- (cs-s-bit-start slot)
+                                              sb-impl::+udef-reserved-low-bits+))))))
 
 
 (defmacro def-column-struct (name-and-options &rest slots)
@@ -667,9 +990,8 @@
   - :INITIAL-SIZE to avoid reallocations
   - :CONSTRUCTOR
   - :UDEF-INTTYPE-ID
-  - :MAX-BITS
-  - :BATCHED gives lower batch size for a 2-level allocation;
-  with T a default is chosen from INITIAL-SIZE
+  - :INDEX-BITS
+  - :BATCHED for a 2-level allocation, pass T for a heuristic
   - :WITH-BATCH-MACRO provides a macro that does batch allocations,
   for use in threads
 
@@ -687,8 +1009,9 @@
       ;; so honour pre-declared UDEFs.
       (multiple-value-bind (old-id old-from-u old-to-u old-typep old-bits)
           (get-existing-udef-f-t-p-b struct-name)
-        (sb-int:with-unique-names (old-size idx where)
-          (let* ((initial-size (option :initial-size 16384))
+        (sb-int:with-unique-names (old-size where)
+          (let* ((*current-cs-sym* struct-name)
+                 (initial-size (option :initial-size 16384))
                  (batched% (option :batch-size nil))
                  (batch-size (if (eq batched% t)
                                  (default-batch-size initial-size)
@@ -703,119 +1026,159 @@
                  (udef-typep (or old-typep
                                  (option :udef-typep
                                          (sb-int:gensymify* struct-name :-type-p))))
+                 (index-name (sb-int:gensymify* :%index))
+                 (index-bits (option :index-bits 32))
                  (max-bits (or old-bits
-                               (option :max-bits 32)))
+                               (option :max-bits nil)
+                               index-bits
+                               32))
                  ;;
                  (base-constructor (option :base-constructor (sb-int:gensymify* struct-name :-constructor)))
-                 ;;; (slots-vec-sym  (option :slots-vec-sym (sb-int:gensymify* struct-name :-slots-vec)))
                  ;;
                  (with-batch-macro (option :with-batch-allocation-name nil))
                  (constructor-name (option :constructor
                                            (intern (format nil "~a~a" :make- struct-name)
                                                    (symbol-package struct-name))))
                  ;;
+                 (uint-def `(def-udef-inttype ,struct-name
+                              :id ,old-id
+                              :max-bits ,max-bits
+                              ;; NIL gets stored in U-B columns as -1 (mod bits) values
+                              :nil-as-minus-1 t ; TODO configurable?
+                              :typep ,udef-typep
+                              :to-udef ,to-udef
+                              :from-udef ,from-udef))
+                 ;; Make that available now (needed in HANDLE-C-S-SLOTS),
+                 ;; and return the form for load-time as well
+                 ;; won't redefine if udef already exists
+                 (ud (eval uint-def))
+                 ;;
                  (as-alist-sym (sb-int:gensymify* struct-name :-as-alist)))
+            (declare (ignore ud))
+            ;;
             (multiple-value-bind (slots slot-defs
                                         maker-arg-list maker-checks
-                                        tmp-names)
-                (handle-c-s-slots struct-name slots)
+                                        var-len)
+                (handle-c-s-slots (list* `(,index-name 0
+                                                       :type (unsigned-byte ,index-bits)
+                                                       :allocation :immediate)
+                                         slots))
               (when (zerop (length slot-defs))
                 (error "Need at least one slot in ~s" struct-name))
-              (let ((slot-names (mapcar #'cs-s-slot-name slots))
-                    (tmp (gensym))
-                    (cs-def `(make-udef-c-s-metadata
-                                     :udef          ',struct-name
-                                     :batch-size    ,batch-size
-                                     :slots         (vector ,@ slot-defs)
-                                     :data-vec      (vector ,@(loop for s in slots
-                                                                    collect #()))
-                                     ;;;:slots-vec-sym ',slots-vec-sym
-                                     :as-alist      ',as-alist-sym)))
-                ;; Make that available now, and return the form for load-time as well
-                (eval cs-def)
+              ;;
+              (let* ((slot-names (mapcar #'cs-s-slot-name slots))
+                     (tmp (gensym))
+                     (len (gensym "LEN"))
+                     (numeric-index (gensym "NUM-IDX"))
+                     (up-to (gensym "UP-TO"))
+                     (cs-def `(let ((,tmp (vector ,@ slot-defs)))
+                                (make-udef-c-s-metadata
+                                  :udef          ',struct-name
+                                  :batch-size    ,batch-size
+                                  :slots         ,tmp
+                                  :data-vec      (vector ,@(loop for s in slot-defs
+                                                                 ;; TODO defunct
+                                                                 ;if (asdf/component:parent (find-class (second (second s)))
+                                                                 ;          'cs-mixin-vector-storage-slot)
+                                                                 collect #()))
+                                  :var-len-slot  ,(when var-len
+                                                    `(or (find ',var-len ,tmp
+                                                               :key #'cs-s-slot-name)
+                                                         (error "Can't find length specification slot ~s"
+                                                                ',var-len)))
+                                  ;;;:slots-vec-sym ',slots-vec-sym
+                                  :as-alist      ',as-alist-sym)))
+                     (cs (eval cs-def)))
+                (setf (get struct-name 'column-struct-data)
+                      cs)
                 ;;
                 `(progn
                    (eval-when (:compile-toplevel :load-toplevel :execute)
-                     ;; won't redefine if udef already exists
-                     (def-udef-inttype ,struct-name
-                       :id ,old-id
-                       :max-bits ,max-bits
-                       ;; NIL gets stored in U-B columns as -1 (mod bits) values
-                       :nil-as-minus-1 t ; TODO configurable?
-                       :typep ,udef-typep
-                       :to-udef ,to-udef
-                       :from-udef ,from-udef)
-                     ;;;
-                     ;;; The elements of the slot-vectors have different types.
-                     ;;;(declaim (type (simple-array t (*)) ,slots-vec-sym)
-                     ;;;         (sb-ext:global ,slots-vec-sym))
-                     ;;;(sb-vm:without-arena
-                     ;;;  (setf ,slots-vec-sym
-                     ;;;        (make-array ,(length slot-defs)
-                     ;;;                    :element-type '(simple-array t (*))
-                     ;;;                    :initial-contents (loop repeat ,(length slot-defs)
-                     ;;;                                            collect #()))))
-                     ;;;(declaim (sb-ext:always-bound ,slots-vec-sym))
-                     ;;;;;
+                     ,uint-def
                      ;; TODO: loses value upon reload, keep old contents?
                      (sb-vm:without-arena
                        (setf (get ',struct-name 'column-struct-data)
                              ,cs-def))
                      ;;
+                     ;; Need the (first) accessors for the WITH-C-S-SLOTS in the constructor already
+                     ;;;(declaim ,@ decl)
+                     ,@ (loop for slot in slots
+                              for fns = (getter-and-setter-functions slot cs)
+                              appending (mapcar (lambda (form)
+                                                  (cons 'defun form))
+                                                fns))
+                     ;;
                      #+(or)(declaim (inline ,base-constructor))
-                     (defun ,base-constructor (,where ,idx ,@ tmp-names)
-                       (declare (optimize (debug 1)
-                                          (speed 3)
+                     ;; First slot is the immediate index, to be returned in a udef!
+                     (defun ,base-constructor (,numeric-index ,@ (rest slot-names))
+                       (declare (optimize (debug 3)
+                                          (speed 1)
                                           (compilation-speed 0)
                                           (safety 1))
-                                (type (integer 0 ,(expt 2 max-bits)) ,idx)
-                                (type udef-c-s-metadata ,where))
+                                (type (unsigned-byte ,index-bits) ,numeric-index))
                        ;; TODO: provide restart for reallocation
-                       (locally
-                         (declare (notinline column-struct-size))
+                       (let* ((,where (load-time-col-struct ',struct-name))
+                              ;; Make numeric index available via correct name
+                              (,index-name ,numeric-index)
+                              (,len ,(or (cs-s-slot-name
+                                           (cs-meta-var-len-slot cs))
+                                         1))
+                              ;; For a variable-length allocation, we need that much free space
+                              (,up-to (+ ,numeric-index ,len)))
+                         (declare (notinline column-struct-size)
+                                  (type udef-c-s-metadata ,where)
+                                  ;; Not all C-S
+                                  (ignorable ,index-name))
                          (loop for ,old-size = (column-struct-size ,where)
-                               while (>= ,idx ,old-size)
+                               while (>= ,up-to ,old-size)
                                for i from 0 below 5
                                do (column-struct-resize
                                     ,where
                                     ;; 1 level: exponential growth;
                                     ;; 2-level: only one (batch-size) element added
                                     ,(if batch-size
-                                         `(+ ,idx
+                                         `(+ ,up-to
                                              (cs-meta-batch-size ,where))
                                          `(max (round (* (sqrt 2)
-                                                         ,idx))
-                                               (+ ,idx
-                                                  50))))))
-                       (when (>= ,idx (column-struct-size ,where))
-                         (error "Cannot resize ~s" ',struct-name))
-                       (with-c-s-slots (,struct-name ,idx) ,slot-names
-                         ,@(loop for name in slot-names
-                                 for initarg in tmp-names
-                                 collect `(setf ,name ,initarg)))
-                       ;; Return specifically tagged UDEF-INTTYPE
-                       (,to-udef ,idx))
-                     ;; User-visible constructor function
-                     (defun ,constructor-name (&key ,@ maker-arg-list)
-                       ,@ maker-checks
-                       ;; Value before incrementing
-                       (let* ((,tmp (load-time-col-struct ',struct-name))
-                              (,idx (get-new-id-range ,tmp)))
-                         (,base-constructor ,tmp ,idx ,@ slot-names)))
+                                                         ,up-to))
+                                               (+ ,up-to
+                                                  50)))))
+                         (when (>= ,up-to (column-struct-size ,where))
+                           (error "Cannot resize ~s" ',struct-name))
+                         (let ((,tmp ,(make-udef-with-immediate-slots-form to-udef slots)))
+                           ;; Generate SETFs for column-struct slots
+                           ,@(loop for slot in slots
+                                  for name = (cs-s-slot-name slot)
+                                  for gs = (sb-int:gensymify* name)
+                                  unless (typep slot 'cs-mixin-immediate)
+                                  collect `(setf (,(cs-s-accessor-sym slot) ,tmp)
+                                                 ,name) into setfs
+                                  finally (return setfs))
+                           ;; Return specifically tagged UDEF-INTTYPE
+                           ,tmp)))
                      ;;
-                     ;;;(declaim ,@ decl)
-                     ;;;,@ code
-                     ,@ (loop for slot in slots
-                              collect (cs-getter-fn-form struct-name slot)
-                              collect (cs-setter-fn-form struct-name slot))
+                     ;; User-visible constructor function.
+                     (defun ,constructor-name (&key ,@ (rest maker-arg-list))
+                       ,@ (rest maker-checks)
+                       ;; Value before incrementing
+                       ;; Asked from the _current_ metadata in case of COLUMN-STRUCT-RESET
+                       (let* ((,tmp (get-cs-metadata-from-symbol ',struct-name))
+                              (,index-name (get-new-id-range ,tmp
+                                                             ,(cs-s-slot-name
+                                                                (cs-meta-var-len-slot cs)))))
+                         ;; First arg is the numeric index!
+                         (,base-constructor ,index-name
+                                            ,@ (rest slot-names))))
+                     ;;
                      ;;
                      (defun ,as-alist-sym (,tmp)
-                       (with-c-s-slots (,struct-name ,tmp) ,slot-names
+                       ;; Don't report the index
+                       (with-c-s-slots (,struct-name ,tmp) ,(rest slot-names)
                          (list
-                           ,@(loop for name in slot-names
-                                   collect (intern (symbol-name name)
+                           ,@(loop for name in (rest slot-names)
+                                   collect `(cons ,(intern (symbol-name name)
                                                    :keyword)
-                                   collect name))))
+                                                 ,name)))))
                      ;;
                      ,(when with-batch-macro
                         ;; Sanity check
@@ -824,12 +1187,12 @@
                         (assert (> batch-size 3)) ;; TODO increase
                         (return-batch-macro struct-name with-batch-macro
                                             base-constructor
-                                            maker-arg-list slot-names))
+                                            maker-arg-list (rest slot-names)))
                      ;;
                      ;; BROKEN: There is no class named X.
                      #+(or)
                      (defmethod sb-c::describe-object :after ((obj ,struct-name) stream)
-                       (with-c-s-slots (,struct-name ,idx) slot-names
+                       (with-c-s-slots (,struct-name ,obj) slot-names
                          ,@(loop for name in slot-names
                                  collect `(format stream "~&  ~A = ~A~%" ',name ,name)))))
                    ;;
@@ -903,14 +1266,17 @@
           collect (funcall (udef-metadata-to-udef udef) i))))
 
 
-;; TODO: method dispatch on UDEFs - it's possible on FIXNUM etc. as well!
-;; then fix PRINT-UGLY?
+;; TODO: method dispatch on inner-tagged UDEFs - it's possible on FIXNUM etc. as well!
 
 ;; TODO: box/unbox into (unsigned-byte X) specialized arrays and slots
-;;       (Would that need a new widetag for each udef-tag?)
+;;       (Without needing a new array widetag for each udef-tag?)
 
-;; TODO: optimizing, especially the tags -- check all 16bit at once
-
+;; TODO: (SETF (AREF )) doesn't work for vectors of udef (translation to a differently typed array!)
+;; Detect and complain or even fix?
+;; Would need to see _outer_ AREF?!
 
 ;; TODO: optionally a freelist
 ;; TODO: integration in rucksack etc.
+
+;; TODO: #\Nul or 0 terminated data
+

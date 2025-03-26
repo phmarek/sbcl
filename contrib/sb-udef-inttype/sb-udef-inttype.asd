@@ -5,9 +5,9 @@
 (defsystem "sb-udef-inttype"
   :components ((:file "package")
                (:file "column-structure")
-               (:file "bitfield")
-               (:file "udef-lookup")
-               (:file "buffer-indexing")
+               ;(:file "bitfield")
+               ;(:file "udef-lookup")
+               ;(:file "buffer-indexing")
                ;example-column-structure.lisp
                ;example.lisp
                ;simple.lisp
