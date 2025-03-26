@@ -11,6 +11,32 @@
 ;; also much smaller in other data structures.
 
 
+(defstruct (udef-indexed-buffer-meta
+             (:conc-name :udef-i-b-metadata))
+  (reader       nil :type symbol)
+  (writer       nil :type symbol)
+  (reset        nil :type symbol)
+  ;;
+  (eql-p        nil :type symbol)
+  (len          nil :type symbol)
+  (pos          nil :type symbol)
+  ;;
+  (udef-maker   nil :type symbol)
+  (udef-reader  nil :type symbol)
+  (buffer       nil :type symbol)
+  (eob          nil :type symbol)
+  (lock         nil :type symbol)
+  ;;
+  (dedup-save   nil :type symbol)
+  (dedup-retr   nil :type symbol)
+  (dedup-data   nil :type symbol)
+  (dedup-clear  nil :type symbol)
+  (dedup-size   nil :type (or null fixnum))
+  ;;
+  (batch-size   nil :type (or null fixnum))
+  (element-type t   :type t)
+  (init-element nil :type t))
+
 (defun extend-buffer-master (symbol lock new-index make-fn)
   (let ((now (symbol-value symbol)))
     (when (<= (length now)
@@ -51,10 +77,11 @@
                                            (reader-sym (sb-int:symbolicate :GET- name))
                                            (writer-sym (sb-int:symbolicate :SAVE- name))
                                            (reset-sym (sb-int:symbolicate :RESET- name))
+                                           ;;
+                                           (pos-sym (sb-int:gensymify* name :-POS))
                                            (length-sym (sb-int:symbolicate name :-LENGTH))
                                            (equalp-sym (sb-int:symbolicate name :-EQUALP))
                                            ;;
-                                           (pos-sym (sb-int:gensymify* name :-POS))
                                            (maker (sb-int:gensymify* name :-MAKER))
                                            (reader (sb-int:gensymify* name :-READER))
                                            (buffer-sym (sb-int:gensymify* name :-STORAGE))
@@ -76,6 +103,7 @@
              (not dedup-size))
     (error "Deduplication wanted but no vector size given"))
   (let ((n-batch-size (eval batch-size)))
+    (assert (typep n-batch-size '(integer 10 3000000)))
     `(progn
        (eval-when (:compile-toplevel :load-toplevel :execute)
          (def-bitfield-struct
@@ -85,6 +113,32 @@
              (:max-bits ,(+ len-bits index-bits)))
            (len 0 :type (unsigned-byte ,len-bits)   :accessor ,length-sym)
            (pos 0 :type (unsigned-byte ,index-bits) :accessor ,pos-sym))
+         (setf (get ',name 'buffer-indexing-data)
+               (make-udef-indexed-buffer-meta
+                 :reader ',reader-sym
+                 :writer ',writer-sym
+                 :reset ',reset-sym
+                 ;;
+                 :eql-p ',equalp-sym
+                 :len ',length-sym
+                 :pos ',pos-sym
+                 ;;
+                 :udef-maker ',maker
+                 :udef-reader ',reader
+                 :buffer ',buffer-sym
+                 :eob ',eob-sym
+                 :lock ',lock-sym
+                 ;;
+                 :dedup-save ',dedup-save-fn
+                 :dedup-retr ',dedup-retrieval
+                 :dedup-data ',dedup-storage-sym
+                 :dedup-clear ',dedup-clear-fn
+                 :dedup-size ',dedup-size
+                 ;;
+                 :batch-size ,n-batch-size
+                 :element-type ',element-type
+                 :init-element ',initial-element
+                 ))
          ;;
          (declaim (type sb-vm:word ,eob-sym))
          (defvar ,eob-sym 0)
