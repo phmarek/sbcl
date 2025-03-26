@@ -9,6 +9,7 @@
 (sb-udef-inttype:def-column-struct (foo
                                      (:max-bits 17)
                                      (:initial-size 10)
+                                     (:udef-typep foo-p)
                                      (:data-var my-foo-data))
   (a "" :type string)
   (b 0 :type (unsigned-byte 16))
