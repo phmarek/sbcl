@@ -30,7 +30,8 @@
   (which should be a STRING or (ARRAY (UNSIGNED-BYTE)));
   if the given argument cannot be found via TEST and KEY,
   the new UDEF to be stored is built by running a callback function.
-  RETRIEVE-FN-SYM can be used for lookup without inserting data."
+
+  RETRIEVE-FN-SYM can be used for lookups without inserting data."
   (sb-int:with-unique-names (lookup size)
     `(progn
        (defconstant ,size ,table-size)

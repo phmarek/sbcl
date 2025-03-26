@@ -102,12 +102,16 @@
                                                                 (code-char 0)
                                                                 0))
                                            )
-  "Arranges for WRITER-SYM and READER-SYM to store/retrieve vectors of ELEMENT-TYPEs
-  in a memory/GC-efficient manner, by using large vectors and a UDEF to address these.
-  The input length is stored in LEN-BITS (ie. 8 means a maximum length of 255),
-  and INDEX-BITS restricts the total addressable amount of data.
-  To avoid storing duplicated data, pass in a symbol for DEDUP-SAVE-FN and a DEDUP-SIZE;
-  see DEFINE-UDEF-LOOKUP for more details."
+  "Arranges for WRITER-SYM and READER-SYM to store/retrieve vectors
+  of ELEMENT-TYPE in a memory/GC-efficient manner,
+  by using large vectors and a UDEF to address these.
+
+  INDEX-BITS restricts the total addressable amount of data;
+  the per-item length is stored in LEN-BITS (ie. 8 means a
+  maximum length of 255), so check your input sizes.
+
+  To avoid storing duplicated data, you might want to use
+  DEDUP-SAVE-FN and DEDUP-SIZE; see DEFINE-UDEF-LOOKUP for more details."
   (when (and dedup-save-fn
              (not dedup-size))
     (error "Deduplication wanted but no vector size given"))
