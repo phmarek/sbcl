@@ -170,16 +170,23 @@
                              (,writer-sym input)))))))
          ;;
          (defun ,equalp-sym (udef seq2 &optional (start2 0) end2)
-           (declare (type ,name udef)) ;; TODO repair -- all are udef types
+           (declare (type ,name udef)
+                    (type vector seq2) ;; TODO: typecase for list?
+                    (type sb-int:index start2)
+                    (type (or null sb-int:index) end2)
+                    ) ;; TODO repair -- all are udef types
            (assert (eq ',name (sb-udef-inttype::udef-inttype-type-of udef)))
            (let* ((p (,pos-sym udef)))
              (multiple-value-bind (outer-idx offset) (floor p ,n-batch-size)
-               (let ((vec (aref ,buffer-sym outer-idx)))
-             (loop for p upfrom offset
-                   for i upfrom start2 below (or end2 (length seq2))
-                   repeat (,length-sym udef)
-                   always (eql (aref vec p)
-                               (aref seq2 i)))))))
+               (let* ((vec (aref ,buffer-sym outer-idx))
+                      (end (or end2 (length seq2)))
+                      (end1 (+ offset end (- start2))))
+                 (assert (> (length vec) end1))
+                 (loop for p upfrom offset below end1
+                       for i upfrom start2 below end
+                       repeat (,length-sym udef)
+                       always (eql (aref vec p)
+                                   (aref seq2 i)))))))
          ;;
          (defun ,reset-sym ()
            (setf ,eob-sym 0)
