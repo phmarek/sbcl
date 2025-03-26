@@ -546,12 +546,13 @@
 
 (defgeneric cs-with-cs-form (cs slot vec idx)
   (:documentation
-   "Returns a list of bindings, a list of declarations,
-   a list of FLETs, and a SYMBOL-MACROLET body form, as a list."))
+   "Returns a list of bindings, a list of declarations (first one for VEC),
+   a list of FLETs, their declarations, and a SYMBOL-MACROLET body form, as a list."))
 
 (defmethod cs-with-cs-form (cs (slot cs-slot) vec idx)
   `(()
     ((type (simple-array ,(cs-s-orig-type slot) (*)) ,vec))
+    ()
     ()
     (aref ,vec ,idx)))
 
@@ -570,12 +571,15 @@
             ,content)
        ((setf ,fn) (new)
                    (replace ,content new)))
+      ((ignorable (function (setf ,fn)))
+       (ignorable (function ,fn)))
       (,fn)
       )))
 
 (defmethod cs-with-cs-form (cs (slot cs-s-udef) vec idx)
   `(()
     ((type (simple-array ,(cs-s-u-slot-type slot) (*)) ,vec))
+    ()
     ()
     ;; TODO: always translates to/from NIL
     (ref-udef-vec ,vec ,idx
@@ -616,6 +620,7 @@
              ,(if (cs-meta-batch-size c-s)
                 `(floor ,val (cs-meta-batch-size ,c-s-var))
                 `(values nil ,val))
+           (declare (ignorable ,batch-idx))
            ,(loop for entry in names
                   for e-list = (sb-int:ensure-list entry)
                   for var-name = (first e-list)
@@ -627,19 +632,25 @@
                                  (error "Invalid slot name ~s" slot-name))
                   for batch-var = (sb-int:gensymify* slot-name :-batch)
                   for vec-var = (sb-int:gensymify* slot-name :-data-vec)
-                  for (lets% decls% flets% body%) = (cs-with-cs-form c-s slot vec-var inner-idx)
-                  collect `(,batch-var (aref ,slots-vec ,(cs-s-index slot))) into lets
-                  collect `(,vec-var (if ,batch-idx
-                                         (aref ,batch-var ,batch-idx)
-                                         ,batch-var)) into lets
+                  for (lets% decls% flets% fdecls% body%) = (cs-with-cs-form c-s slot vec-var inner-idx)
+                  for element-vec-type = (second (first decls%))
+                  collect `(,vec-var (the ,element-vec-type
+                                          (let ((,batch-var (aref ,slots-vec ,(cs-s-index slot))))
+                                            ,@(if (cs-meta-batch-size c-s)
+                                                `((declare (type (simple-array ,element-vec-type (*))
+                                                                 ,batch-var))
+                                                  (aref ,batch-var ,batch-idx))
+                                                  `(,batch-var))))) into lets
                   appending lets% into lets
                   appending decls% into decls
                   appending flets% into flets
+                  appending fdecls% into fdecls
                   collect `(,var-name ,body%) into s-macros
                   finally (return
                             `(let* ,lets
                                (declare ,@ decls)
                                (flet , flets
+                                 (declare ,@ fdecls)
                                  (symbol-macrolet ,s-macros
                                    ,@body))))))))))
 
@@ -769,13 +780,13 @@
                                     ,where
                                     ;; 1 level: exponential growth;
                                     ;; 2-level: only one (batch-size) element added
-                                    (if ,(and batch-size t)
-                                        (+ ,idx
-                                           (cs-meta-batch-size ,where))
-                                        (max (round (* (sqrt 2)
-                                                       ,idx))
-                                             (+ ,idx
-                                                50))))))
+                                    ,(if batch-size
+                                         `(+ ,idx
+                                             (cs-meta-batch-size ,where))
+                                         `(max (round (* (sqrt 2)
+                                                         ,idx))
+                                               (+ ,idx
+                                                  50))))))
                        (when (>= ,idx (column-struct-size ,where))
                          (error "Cannot resize ~s" ',struct-name))
                        (with-c-s-slots (,struct-name ,idx) ,slot-names
