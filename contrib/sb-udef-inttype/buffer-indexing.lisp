@@ -102,8 +102,9 @@
   (when (and dedup-save-fn
              (not dedup-size))
     (error "Deduplication wanted but no vector size given"))
-  (let ((n-batch-size (eval batch-size)))
-    (assert (typep n-batch-size '(integer 10 3000000)))
+  (let ((n-batch-size (eval batch-size))
+        (n-dedup-size (eval dedup-size)))
+    (assert (typep n-batch-size '(integer 10 10000000)))
     `(progn
        (eval-when (:compile-toplevel :load-toplevel :execute)
          (def-bitfield-struct
@@ -133,7 +134,7 @@
                  :dedup-retr ',dedup-retrieval
                  :dedup-data ',dedup-storage-sym
                  :dedup-clear ',dedup-clear-fn
-                 :dedup-size ',dedup-size
+                 :dedup-size ',n-dedup-size
                  ;;
                  :batch-size ,n-batch-size
                  :element-type ',element-type
@@ -211,7 +212,7 @@
          ,@(when dedup-save-fn
              ;; TODO DEACTIVATED
              (sb-int:with-unique-names (saver)
-               `((define-udef-lookup ,dedup-size ,dedup-retrieval ,saver
+               `((define-udef-lookup ,n-dedup-size ,dedup-retrieval ,saver
                    :table-sym ,dedup-storage-sym
                    :clear-table-fn-sym ,dedup-clear-fn
                    :key ,reader-sym
