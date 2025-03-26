@@ -62,6 +62,7 @@
   (destructuring-bind (name &key (translation nil trans-p) &allow-other-keys)
       x
     (/show "doing class with" name)
+    ;(format *trace-output* "doing class ~s with ~s~%" name translation)
     (when trans-p
       (let ((classoid (classoid-cell-classoid (find-classoid-cell name :create t)))
             (type (specifier-type translation)))
