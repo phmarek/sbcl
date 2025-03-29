@@ -668,8 +668,7 @@
   - :CONSTRUCTOR
   - :UDEF-INTTYPE-ID
   - :MAX-BITS
-  - :BATCHED gives lower batch size for a 2-level allocation;
-  with T a default is chosen from INITIAL-SIZE
+  - :BATCHED for a 2-level allocation, pass T for a heuristic
   - :WITH-BATCH-MACRO provides a macro that does batch allocations,
   for use in threads
 

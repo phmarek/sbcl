@@ -79,10 +79,12 @@
                                    :from-udef ,udef-reader))
                              ;;
                              (defun ,constructor-name (&key ,@ (mapcar #'list slot-names init-vals))
+                               (declare (optimize (speed 3) (debug 0) (safety 1)))
                                ,@ (loop for n in slot-names
                                         for l in lengths
                                         collect `(check-type ,n (unsigned-byte ,l)))
-                               (,udef-maker
+                               (sb-impl:make-twice-tagged-udef
+                                 ,udef-inttype-id
                                  (logior ,@ (loop for n in slot-names
                                                   for p in starts
                                                   collect `(ash ,n ,p)))))
