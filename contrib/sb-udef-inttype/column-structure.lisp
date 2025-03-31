@@ -77,26 +77,44 @@
   (lock            (sb-thread:make-mutex :name "c-s-upper-lock")
                        :type sb-thread:mutex
                        :read-only t)
+  ;; A number or a symbol
+  (len-multiple    nil :type t           :read-only t)
   (slots           nil :type vector      :read-only t)
+  ;; use a separate list?
+  ;; initargs must be in correct order in case one value references another,
+  ;; but apart from that there's no order needed?
+  ; (imm-slots       nil :type list        :read-only t)
   (data-vec        #() :type simple-vector :read-only t))
 
-(defclass cs-slot ()
-  ((index         :initform 0   :initarg :index        :type fixnum        :reader cs-s-index        )
-   (slot-name     :initform nil :initarg :slot-name    :type symbol        :reader cs-s-slot-name    )
+(defclass cs-vec-slot ()
+  ((index         :initform 0   :initarg :index        :type fixnum        :reader cs-s-index        )))
+
+(defclass cs-slot-common ()
+  ((slot-name     :initform nil :initarg :slot-name    :type symbol        :reader cs-s-slot-name    )
    (accessor-sym  :initform nil :initarg :accessor-sym :type symbol        :reader cs-s-accessor-sym )
-   ;; User-supplied data
    (orig-type     :initform nil :initarg :orig-type    :type t             :reader cs-s-orig-type    )
+   ;; User-supplied data
    (init-fn       :initform nil :initarg :init-fn      :type t             :reader cs-s-init-fn      )
    (init-form     :initform nil :initarg :init-form    :type t             :reader cs-s-init-form    )))
 
-(defclass cs-s-array  (cs-slot)
+(defclass cs-slot (cs-slot-common cs-vec-slot)
+  ())
+
+(defclass cs-s-array  (cs-slot-common cs-vec-slot)
   ;; vectors can be serialized
   ((array-dim     :initform   0 :initarg :array-dim     :type sb-int:index  :reader cs-s-array-dim    )
+   (array-multiple :initform nil :initarg :array-multiple :type t :reader cs-s-array-multiple)
    (array-el-type :initform nil :initarg :array-el-type :type t             :reader cs-s-array-el-type)))
 
-(defclass cs-s-udef (cs-slot)
+(defclass cs-s-udef (cs-slot-common cs-vec-slot)
   ((udef-sym      :initform nil :initarg :udef-sym      :type symbol        :reader cs-s-udef-sym     )
    (u-slot-type   :initform nil :initarg :u-slot-type   :type list          :reader cs-s-u-slot-type  )
+   ))
+
+(defclass cs-s-immediate (cs-slot-common)
+  ((start         :initform  -1 :initarg :start         :type fixnum        :accessor cs-s-bit-start)
+   (count         :initform   0 :initarg :count         :type fixnum        :reader cs-s-bit-count)
+   (ldb           :initform nil :initarg :ldbs          :type list          :accessor cs-s-ldb)
    ))
 
 (defclass cs-s-udef-vector (cs-s-array cs-s-udef)
@@ -122,7 +140,7 @@
 (defgeneric cs-s-storage-type (item)
   (:documentation
    "Returns the _storage_ type for ITEM.")
-  (:method ((slot cs-slot))
+  (:method ((slot cs-slot-common))
     (cs-s-orig-type slot))
   (:method ((slot cs-s-array))
     (cs-s-array-el-type slot))
@@ -138,7 +156,7 @@
 (defgeneric cs-s-input-type (item)
   (:documentation
    "Returns the _input_ type for ITEM.")
-  (:method ((slot cs-slot))
+  (:method ((slot cs-slot-common))
     (cs-s-orig-type slot))
   (:method ((slot cs-s-udef))
     `(or ,(cs-s-orig-type slot)
@@ -261,42 +279,37 @@
                                   (ceiling new-size (cs-meta-batch-size c-s))
                                   new-size)))
            (loop for slot-def across (cs-meta-slots c-s)
-                 for slot-vec across (cs-meta-data-vec c-s)
-                 for slot-nr = (cs-s-index slot-def)
-                 for orig-type = (cs-s-orig-type slot-def)
-                 ;for slot-type = (or (cs-s-trslt-type slot-def)
-                 ;                    (cs-s-array-el-type slot-def)
-                 ;                    orig-type
-                 ;                    (error "No type"))
-                 for slot-type = (cs-s-storage-type slot-def)
-                 for elem-per-slot = (or (cs-s-array-dim slot-def)
-                                         1)
-                 for init-val = (funcall (cs-s-init-fn slot-def))
-                 for new-elements = (- new-vec-size (array-dimension slot-vec 0))
-                 do (setf (aref (cs-meta-data-vec c-s)
-                                slot-nr)
-                          (if 2-level?
-                              ;; create a number of batches
-                              (let* ((new (loop repeat new-elements
-                                                collect (make-array (* elem-per-slot
-                                                                       (cs-meta-batch-size c-s))
-                                                                    :element-type slot-type
-                                                                    :adjustable nil
-                                                                    :fill-pointer nil
-                                                                    :displaced-to nil
-                                                                    :initial-element (single-initial-element slot-def)
-                                                                    )))
-                                     (data (concatenate 'list slot-vec new)))
-                                (make-array new-vec-size
-                                            :element-type (array-element-type slot-vec)
-                                            :initial-contents data))
-                              (let* ((new (make-list (* elem-per-slot new-elements)
-                                                     :initial-element (single-initial-element slot-def)))
-                                     (data (concatenate 'list slot-vec new)))
-                                (make-array (* elem-per-slot
-                                               new-vec-size)
-                                            :element-type slot-type
-                                            :initial-contents data)))))
+                 when (typep slot-def 'cs-vec-slot)
+                 do (let* ((slot-nr (cs-s-index slot-def))
+                           (slot-vec (aref (cs-meta-data-vec c-s) slot-nr))
+                           (slot-type (cs-s-storage-type slot-def))
+                           (elem-per-slot (or (cs-s-array-dim slot-def)
+                                              1))
+                           (new-elements (- new-vec-size (array-dimension slot-vec 0))))
+                      (setf (aref (cs-meta-data-vec c-s)
+                                  slot-nr)
+                            (if 2-level?
+                                ;; create a number of batches
+                                (let* ((new (loop repeat new-elements
+                                                  collect (make-array (* elem-per-slot
+                                                                         (cs-meta-batch-size c-s))
+                                                                      :element-type slot-type
+                                                                      :adjustable nil
+                                                                      :fill-pointer nil
+                                                                      :displaced-to nil
+                                                                      :initial-element (single-initial-element slot-def)
+                                                                      )))
+                                       (data (concatenate 'list slot-vec new)))
+                                  (make-array new-vec-size
+                                              :element-type (array-element-type slot-vec)
+                                              :initial-contents data))
+                                (let* ((new (make-list (* elem-per-slot new-elements)
+                                                       :initial-element (single-initial-element slot-def)))
+                                       (data (concatenate 'list slot-vec new)))
+                                  (make-array (* elem-per-slot
+                                                 new-vec-size)
+                                              :element-type slot-type
+                                              :initial-contents data))))))
            (sb-vm:%write-barrier)
            (setf (cs-meta-allocated c-s)
                  (if 2-level?
@@ -364,15 +377,16 @@
 
 (defun parse-slot (input)
   (declare (sb-ext:muffle-conditions style-warning))
-  (destructuring-bind (name &optional init &key (type t))
+  (destructuring-bind (name &optional init &key (type t) (allocation :default))
       (sb-int:ensure-list input)
-    (values name init type)))
+    (values name init type allocation)))
 
 (defun is-simple-1dim-array (type)
   (ignore-errors
     ;; restricted to a subset of possible array-types
     (destructuring-bind (kind element-type (dimension)) type
       (when (and (member kind '(array simple-array))
+                 #+(or)
                  (numberp dimension))
         (multiple-value-bind (c-s element-udef)
             (get-cs-metadata-from-symbol element-type)
@@ -390,7 +404,7 @@
 ;;   It allows an unknown number of values, consider using
 ;;     (VALUES SB-INT:UDEF-INTTYPE &OPTIONAL).
 
-(defmethod cs-getter-fn-form (struct-name (slot cs-slot))
+(defmethod cs-getter-fn-form (struct-name (slot cs-vec-slot))
   (with-slots (accessor-sym slot-name) slot
   `(defun ,accessor-sym (id)
      (declare (optimize (speed 3) (safety 1) (debug 1))
@@ -423,6 +437,14 @@
           (values (subseq ,slot-name start end)))
          (t
           (values ,slot-name)))))))
+
+(defmethod cs-getter-fn-form (struct-name (slot cs-s-immediate))
+  (with-slots (accessor-sym slot-name) slot
+  `(defun ,accessor-sym (id)
+     (declare (optimize (speed 3) (safety 1) (debug 1))
+              (type ,struct-name id))
+     (ldb ,(cs-s-ldb slot) (sb-kernel:get-lisp-obj-address id)))))
+
 
 ;; Setters --------------------------------------------------
 ;;
@@ -462,14 +484,43 @@
             (replace ,slot-name new)
             new))))))
 
-(defun get-slot-def (struct-name index input)
-  (multiple-value-bind (name init user-type) (parse-slot input)
+(defmethod cs-setter-fn-form (struct-name (slot cs-s-immediate))
+  "No setter function for immediate slots -
+  they're used to _address_ data and so can't be changed afterwards")
+
+
+(defmacro value-before-incf (place &optional (count 1))
+  `(prog1
+       ,place
+     (incf ,place ,count)))
+
+(defun get-slot-def (struct-name b-idx+s-nr input)
+  (multiple-value-bind (name init user-type allocation) (parse-slot input)
     (multiple-value-bind (c-s meta) (get-cs-metadata-from-symbol user-type)
       (declare (ignore c-s))
       (destructuring-bind (&optional arr-element-type arr-len arr-udef)
           (is-simple-1dim-array user-type)
         (multiple-value-bind (type+args)
             (cond
+              ((eq allocation :immediate)
+               (unless (and (consp user-type)
+                            (eq (first user-type) 'unsigned-byte)
+                            (numberp (second user-type)))
+                 (error ":ALLOCATION :IMMEDIATE only allowed for (UNSIGNED-BYTE x)"))
+               (let ((bits (second user-type))
+                     (start (value-before-incf (first b-idx+s-nr))))
+                 (when (> (first b-idx+s-nr)
+                          sb-vm:n-word-bits)
+                   (error ":ALLOCATION :IMMEDIATE slots exceed max bit size (~d > ~d)."
+                          (first b-idx+s-nr) sb-vm:n-word-bits))
+                 `('cs-s-immediate
+                   :start ,start
+                   :count ,bits
+                   :ldbs `(byte ,,bits ,,start))))
+              ((not (eq allocation :default))
+               ;; TODO: allow individual slots to specify 1 or 2 levels?
+               ;; Doesn't make that much sense, does it?
+               (error "Bad :ALLOCATION"))
               (arr-element-type
                (when arr-udef
                  (error "Array of UDEFs not implemented yet"))
@@ -481,34 +532,55 @@
                                     :element-type ',arr-element-type
                                     :initial-element ,init)))
                `('cs-s-array
-                     :array-dim ,arr-len
-                     :array-el-type ',arr-element-type))
+                 :array-dim ,(when (numberp arr-len) 
+                               arr-len)
+                 :array-multiple ,(when (symbolp arr-len)
+                                    arr-len)
+                 :array-el-type ',arr-element-type))
               (meta
-                #+(or)
+               #+(or)
                (setf init
                      `(,(udef-metadata-store-udef meta)
                         ,init))
                `('cs-s-udef
-                     :udef-sym ',user-type
-                     :u-slot-type ',(cs-s-storage-type meta)))
+                 :udef-sym ',user-type
+                 :u-slot-type ',(cs-s-storage-type meta)))
               (t
                `('cs-slot)))
-        `(make-instance ,@ type+args
-          :index        ,index
-          :slot-name    ',name
-          :accessor-sym ',(sb-int:symbolicate struct-name "-" name)
-          :orig-type    ',user-type
-          :init-form    ',init
-          ;; default
-          :init-fn      (sb-ext:with-current-source-form (',input)
-                          (lambda () ,init))))))))
+          `(make-instance ,@ type+args
+                          ,@ (if (eq (second (first type+args)) 'cs-s-immediate)
+                                 ()
+                                 `(:index      ,(value-before-incf (second b-idx+s-nr))))
+                          :orig-type  ',user-type
+                          :slot-name    ',name
+                          :accessor-sym ',(sb-int:symbolicate struct-name "-" name)
+                          :init-form    ',init
+                          ;; default
+                          :init-fn      (sb-ext:with-current-source-form (',input)
+                                          (lambda () ,init))))))))
 
+(defun check-var-len-slots (slots)
+  ;; all slots with same variable length multiple
+  (let ((var-len-args (remove nil
+                              (mapcar (lambda (slot)
+                                        (and (typep slot 'cs-s-array)
+                                             (cs-s-array-multiple slot)))
+                                      slots))))
+    (when var-len-args
+      (unless (and (apply #'eq var-len-args)
+                   (find (first var-len-args)
+                         slots
+                         :key #'cs-s-slot-name
+                         :test #'eq))
+        (error "All slots with variable length vectors must use the same symbol for the length,~
+               and it must be defined as an slot (possibly with :ALLOCATION :IMMEDIATE).")))))
 
 (defun handle-c-s-slots (struct-name slot-input)
   (loop with new-val = (gensym "NEW-VAL")
+        with bit-index+slot-nr = (list sb-impl::+udef-reserved-low-bits+ 0)
         for s-i in slot-input
         for i upfrom 0
-        for slot-form = (get-slot-def struct-name i s-i)
+        for slot-form = (get-slot-def struct-name bit-index+slot-nr s-i)
         ;; precedent: (sb-xc:defmacro DEFCLASS) in defclass.lisp
         for slot = (eval slot-form)
         for slot-name = (cs-s-slot-name slot)
@@ -522,9 +594,11 @@
                       (cs-s-init-form slot)) into maker-args
         collect `(check-type ,slot-name
                              ,(cs-s-input-type slot)) into maker-checks
-        finally (return (values slots slot-forms
-                                maker-args maker-checks
-                                tmp-names))))
+        finally (progn
+                  (check-var-len-slots slots)
+                  (return (values slots slot-forms
+                                  maker-args maker-checks
+                                  tmp-names)))))
 
 
 (declaim (notinline ref-udef-vec
@@ -544,19 +618,19 @@
   new)
 
 
-(defgeneric cs-with-cs-form (cs slot vec idx)
+(defgeneric cs-with-cs-form (cs slot vec slots-vec batch idx udef)
   (:documentation
    "Returns a list of bindings, a list of declarations (first one for VEC),
    a list of FLETs, their declarations, and a SYMBOL-MACROLET body form, as a list."))
 
-(defmethod cs-with-cs-form (cs (slot cs-slot) vec idx)
+(defmethod cs-with-cs-form (cs (slot cs-vec-slot) vec slots-vec batch idx udef)
   `(()
     ((type (simple-array ,(cs-s-orig-type slot) (*)) ,vec))
     ()
     ()
     (aref ,vec ,idx)))
 
-(defmethod cs-with-cs-form (cs (slot cs-s-array) vec idx)
+(defmethod cs-with-cs-form (cs (slot cs-s-array) vec slots-vec batch idx udef)
   (sb-int:with-unique-names (scaled-idx fn content)
     `(((,scaled-idx (* ,idx ,(cs-s-array-dim slot)))
        (,content (make-array (list ,(cs-s-array-dim slot))
@@ -576,7 +650,7 @@
       (,fn)
       )))
 
-(defmethod cs-with-cs-form (cs (slot cs-s-udef) vec idx)
+(defmethod cs-with-cs-form (cs (slot cs-s-udef) vec slots-vec batch idx udef)
   `(()
     ((type (simple-array ,(cs-s-u-slot-type slot) (*)) ,vec))
     ()
@@ -591,6 +665,32 @@
                               (get-udef-metadata-from-symbol
                                 (cs-s-udef-sym slot))))))))
 
+(defmethod cs-with-cs-form :around (cs (slot cs-vec-slot) vec slots-vec batch idx udef)
+  (let* ((slot-name        (cs-s-slot-name    slot))
+         (batch-var        (sb-int:gensymify* slot-name :-batch))
+         (vec-var          (sb-int:gensymify* slot-name :-data-vec)))
+    (destructuring-bind (lets decls &rest rest) 
+        (call-next-method cs slot vec-var slots-vec batch idx udef)
+      (let ((element-vec-type (second (first decls))))
+        (list*
+          (list* `(,vec-var (the ,element-vec-type
+                                 (let ((,batch-var (aref ,slots-vec ,(cs-s-index slot))))
+                                   ,@(if (cs-meta-batch-size cs)
+                                         `((declare (type (simple-array ,element-vec-type (*))
+                                                          ,batch-var))
+                                           (aref ,batch-var ,batch))
+                                         `(,batch-var)))))
+                 lets)
+          decls
+          rest)))))
+
+(defmethod cs-with-cs-form (cs (slot cs-s-immediate) vec slots-vec batch idx udef)
+  `(()
+    ()
+    ()
+    ()
+    (ldb ,(cs-s-ldb slot) (sb-kernel:get-lisp-obj-address ,udef))))
+
 
 ;; Hook into CL:WITH-SLOTS?
 ;; sb-mop:slot-value-using-class?
@@ -601,13 +701,10 @@
   (multiple-value-bind (c-s def) (get-cs-metadata-from-symbol udef-name t)
     (sb-int:with-unique-names (val iidx slots-vec batch-idx inner-idx c-s-var)
       `(let* ((,iidx ,index)
-              (,val (cond
-                      ((numberp ,iidx)
-                       ,iidx)
-                      ((,(udef-metadata-type-p def) ,iidx)
-                       (,(udef-metadata-store-udef def) ,iidx))
-                      (t (error "wrong input ~s, expect ~s udef"
-                                ,iidx ',(cs-meta-udef c-s)))))
+              (,val (if (,(udef-metadata-type-p def) ,iidx)
+                        (,(udef-metadata-store-udef def) ,iidx)
+                        (error "wrong input ~s, expect ~s udef"
+                               ,iidx ',(cs-meta-udef c-s))))
               (,c-s-var (load-time-col-struct ',udef-name))
               (,slots-vec (load-time-slot-vector ',udef-name)))
          (declare (ignorable ,c-s-var))
@@ -630,17 +727,7 @@
                                        :test #'eq
                                        :key #'cs-s-slot-name)
                                  (error "Invalid slot name ~s" slot-name))
-                  for batch-var = (sb-int:gensymify* slot-name :-batch)
-                  for vec-var = (sb-int:gensymify* slot-name :-data-vec)
-                  for (lets% decls% flets% fdecls% body%) = (cs-with-cs-form c-s slot vec-var inner-idx)
-                  for element-vec-type = (second (first decls%))
-                  collect `(,vec-var (the ,element-vec-type
-                                          (let ((,batch-var (aref ,slots-vec ,(cs-s-index slot))))
-                                            ,@(if (cs-meta-batch-size c-s)
-                                                `((declare (type (simple-array ,element-vec-type (*))
-                                                                 ,batch-var))
-                                                  (aref ,batch-var ,batch-idx))
-                                                  `(,batch-var))))) into lets
+                  for (lets% decls% flets% fdecls% body%) = (cs-with-cs-form c-s slot nil slots-vec batch-idx inner-idx iidx)
                   appending lets% into lets
                   appending decls% into decls
                   appending flets% into flets
@@ -667,7 +754,7 @@
   - :INITIAL-SIZE to avoid reallocations
   - :CONSTRUCTOR
   - :UDEF-INTTYPE-ID
-  - :MAX-BITS
+  - :INDEX-BITS
   - :BATCHED for a 2-level allocation, pass T for a heuristic
   - :WITH-BATCH-MACRO provides a macro that does batch allocations,
   for use in threads
@@ -702,6 +789,7 @@
                  (udef-typep (or old-typep
                                  (option :udef-typep
                                          (sb-int:gensymify* struct-name :-type-p))))
+                 (index-bits (option :index-bits 32))
                  (max-bits (or old-bits
                                (option :max-bits 32)))
                  ;;
@@ -720,6 +808,13 @@
                 (handle-c-s-slots struct-name slots)
               (when (zerop (length slot-defs))
                 (error "Need at least one slot in ~s" struct-name))
+              ;;
+              ;;(when (null index-bits)
+              ;;  (setf index-bits
+              ;;        (- )))
+              ;;
+              ;; check max bits
+              ;;
               (let ((slot-names (mapcar #'cs-s-slot-name slots))
                     (tmp (gensym))
                     (cs-def `(make-udef-c-s-metadata

@@ -197,3 +197,30 @@
               (progn 1))
             (values ht
                     'my-bar-data)))))
+
+
+
+(sb-udef-inttype:def-column-struct (imm
+                                     (:max-bits 19)
+                                     (:index-bits 3)
+                                     (:initial-size 10)
+                                     (:udef-typep foo-p)
+                                     (:data-var my-foo-data))
+  (a "" :type string)
+  (b 0 :type (unsigned-byte 16) :allocation :immediate)
+  (c 22 :type fixnum))
+
+(describe
+  (aref
+    (sb-udef-inttype::cs-meta-slots 
+      (get 'imm 'sb-udef-inttype::column-struct-data))
+    1))
+
+(defun test-imm (x)
+  (sb-udef-inttype::with-c-s-slots (imm x) 
+      (a b c)
+    (format t "~s ~s ~s~%" a b c)
+    (list (string-upcase a)
+          b
+          (decf c))))
+(test-imm (make-imm))
