@@ -214,7 +214,7 @@
   (aref
     (sb-udef-inttype::cs-meta-slots 
       (get 'imm 'sb-udef-inttype::column-struct-data))
-    1))
+    0))
 
 (defun test-imm (x)
   (sb-udef-inttype::with-c-s-slots (imm x) 

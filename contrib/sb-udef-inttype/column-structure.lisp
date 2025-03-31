@@ -77,7 +77,7 @@
   (lock            (sb-thread:make-mutex :name "c-s-upper-lock")
                        :type sb-thread:mutex
                        :read-only t)
-  ;; A number or a symbol
+  ;; Length symbol for variable-length slots
   (len-multiple    nil :type t           :read-only t)
   (slots           nil :type vector      :read-only t)
   ;; use a separate list?
@@ -195,9 +195,9 @@
              (get-udef-metadata-from-symbol (cs-meta-udef sym))))))
 
 ;(declaim (inline get-new-id-range))
-(defun get-new-id-range (obj &optional (count 1))
+(defun get-new-id-range (obj &optional count)
   (sb-ext:atomic-incf (cs-meta-next obj)
-                      count))
+                      (or count 1)))
 
 (declaim (ftype (function (t) (sb-int:index)) column-struct-size))
 (defun column-struct-size (obj)
@@ -507,8 +507,8 @@
                             (eq (first user-type) 'unsigned-byte)
                             (numberp (second user-type)))
                  (error ":ALLOCATION :IMMEDIATE only allowed for (UNSIGNED-BYTE x)"))
-               (let ((bits (second user-type))
-                     (start (value-before-incf (first b-idx+s-nr))))
+               (let* ((bits (second user-type))
+                      (start (value-before-incf (first b-idx+s-nr) bits)))
                  (when (> (first b-idx+s-nr)
                           sb-vm:n-word-bits)
                    (error ":ALLOCATION :IMMEDIATE slots exceed max bit size (~d > ~d)."
@@ -550,7 +550,7 @@
           `(make-instance ,@ type+args
                           ,@ (if (eq (second (first type+args)) 'cs-s-immediate)
                                  ()
-                                 `(:index      ,(value-before-incf (second b-idx+s-nr))))
+                                 `(:index  ,(value-before-incf (second b-idx+s-nr))))
                           :orig-type  ',user-type
                           :slot-name    ',name
                           :accessor-sym ',(sb-int:symbolicate struct-name "-" name)
@@ -773,7 +773,7 @@
       ;; so honour pre-declared UDEFs.
       (multiple-value-bind (old-id old-from-u old-to-u old-typep old-bits)
           (get-existing-udef-f-t-p-b struct-name)
-        (sb-int:with-unique-names (old-size idx where)
+        (sb-int:with-unique-names (old-size where)
           (let* ((initial-size (option :initial-size 16384))
                  (batched% (option :batch-size nil))
                  (batch-size (if (eq batched% t)
@@ -789,9 +789,12 @@
                  (udef-typep (or old-typep
                                  (option :udef-typep
                                          (sb-int:gensymify* struct-name :-type-p))))
-                 (index-bits (option :index-bits 32))
+                 (index-name (sb-int:gensymify* struct-name :-index))
+                 (index-bits (option :index-bits nil))
                  (max-bits (or old-bits
-                               (option :max-bits 32)))
+                               (option :max-bits nil)
+                               index-bits
+                               32))
                  ;;
                  (base-constructor (option :base-constructor (sb-int:gensymify* struct-name :-constructor)))
                  ;;; (slots-vec-sym  (option :slots-vec-sym (sb-int:gensymify* struct-name :-slots-vec)))
@@ -802,31 +805,38 @@
                                                    (symbol-package struct-name))))
                  ;;
                  (as-alist-sym (sb-int:gensymify* struct-name :-as-alist)))
+            ;;
+            ;;(when (null index-bits)
+            ;;  (setf index-bits
+            ;;        (- )))
+            ;;
+            ;; check max bits, including index!!
+            ;;
             (multiple-value-bind (slots slot-defs
                                         maker-arg-list maker-checks
                                         tmp-names)
-                (handle-c-s-slots struct-name slots)
+                (handle-c-s-slots struct-name 
+                                  (list* `(,index-name 0
+                                                       :type (unsigned-byte ,index-bits)
+                                                       :allocation :immediate)
+                                         slots))
               (when (zerop (length slot-defs))
                 (error "Need at least one slot in ~s" struct-name))
               ;;
-              ;;(when (null index-bits)
-              ;;  (setf index-bits
-              ;;        (- )))
-              ;;
-              ;; check max bits
-              ;;
-              (let ((slot-names (mapcar #'cs-s-slot-name slots))
-                    (tmp (gensym))
-                    (cs-def `(make-udef-c-s-metadata
-                                     :udef          ',struct-name
-                                     :batch-size    ,batch-size
-                                     :slots         (vector ,@ slot-defs)
-                                     :data-vec      (vector ,@(loop for s in slots
-                                                                    collect #()))
-                                     ;;;:slots-vec-sym ',slots-vec-sym
-                                     :as-alist      ',as-alist-sym)))
-                ;; Make that available now, and return the form for load-time as well
-                (eval cs-def)
+              (let* ((slot-names (mapcar #'cs-s-slot-name slots))
+                     (tmp (gensym))
+                     ;; Name of index-variable in tmp-names
+                     (idx (first tmp-names))
+                     (cs-def `(make-udef-c-s-metadata
+                                :udef          ',struct-name
+                                :batch-size    ,batch-size
+                                :slots         (vector ,@ slot-defs)
+                                :data-vec      (vector ,@(loop for s in slots
+                                                               collect #()))
+                                ;;;:slots-vec-sym ',slots-vec-sym
+                                :as-alist      ',as-alist-sym))
+                     ;; Make that available now, and return the form for load-time as well
+                     (cs (eval cs-def)))
                 ;;
                 `(progn
                    (eval-when (:compile-toplevel :load-toplevel :execute)
@@ -857,12 +867,13 @@
                              ,cs-def))
                      ;;
                      #+(or)(declaim (inline ,base-constructor))
-                     (defun ,base-constructor (,where ,idx ,@ tmp-names)
+                     ;; First slot is the immediate index, to return in a udef!
+                     (defun ,base-constructor (,where ,@ tmp-names)
                        (declare (optimize (debug 1)
                                           (speed 3)
                                           (compilation-speed 0)
                                           (safety 1))
-                                (type (integer 0 ,(expt 2 max-bits)) ,idx)
+                                (type (integer 0 ,(expt 2 index-bits)) ,idx)
                                 (type udef-c-s-metadata ,where))
                        ;; TODO: provide restart for reallocation
                        (locally
@@ -883,19 +894,34 @@
                                                   50))))))
                        (when (>= ,idx (column-struct-size ,where))
                          (error "Cannot resize ~s" ',struct-name))
-                       (with-c-s-slots (,struct-name ,idx) ,slot-names
-                         ,@(loop for name in slot-names
-                                 for initarg in tmp-names
-                                 collect `(setf ,name ,initarg)))
+                       ,(loop for slot in slots
+                              for name = (cs-s-slot-name slot)
+                              for initarg in tmp-names
+                              when (typep slot 'cs-vec-slot)
+                              collect `(setf ,name ,initarg) into setfs
+                              and collect name into s-names
+                              finally (return
+                                        `(with-c-s-slots (,struct-name ,idx) ,s-names
+                                           ,@ setfs)))
                        ;; Return specifically tagged UDEF-INTTYPE
-                       (,to-udef ,idx))
+                       (sb-impl:make-twice-tagged-udef
+                         ,old-id
+                         (logior ,@ (loop for slot in slots
+                                          for name in tmp-names
+                                          when (typep slot 'cs-s-immediate)
+                                          collect `(ash ,name
+                                                        ,(cs-s-bit-start slot))))))
                      ;; User-visible constructor function
-                     (defun ,constructor-name (&key ,@ maker-arg-list)
-                       ,@ maker-checks
+                     ;; TODO: keep index gensym available in constructor?
+                     ;; now it's dropped via REST here
+                     (defun ,constructor-name (&key ,@ (rest maker-arg-list))
+                       ,@ (rest maker-checks)
                        ;; Value before incrementing
                        (let* ((,tmp (load-time-col-struct ',struct-name))
-                              (,idx (get-new-id-range ,tmp)))
-                         (,base-constructor ,tmp ,idx ,@ slot-names)))
+                              (,idx (get-new-id-range ,tmp
+                                                      ,(cs-meta-len-multiple cs))))
+                         ;; First arg is the index
+                         (,base-constructor ,tmp ,idx ,@ (rest slot-names))))
                      ;;
                      ;;;(declaim ,@ decl)
                      ;;;,@ code
