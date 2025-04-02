@@ -223,4 +223,4 @@
     (list (string-upcase a)
           b
           (decf c))))
-(test-imm (make-imm))
+(test-imm (make-imm :a "Aasda" :b 2 :c 111))

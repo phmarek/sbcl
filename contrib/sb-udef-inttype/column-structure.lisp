@@ -689,7 +689,12 @@
     ()
     ()
     ()
-    (ldb ,(cs-s-ldb slot) (sb-kernel:get-lisp-obj-address ,udef))))
+    ;; Can only be read anyway
+    (if (,(sb-impl:udef-metadata-type-p
+            (get-udef-metadata-from-symbol 
+              (cs-meta-udef cs))) ,udef)
+        (ldb ,(cs-s-ldb slot) (sb-kernel:get-lisp-obj-address ,udef))
+        (error "Can't SETF immediate slots of an UDEF with an integer index input."))))
 
 
 ;; Hook into CL:WITH-SLOTS?
@@ -701,10 +706,14 @@
   (multiple-value-bind (c-s def) (get-cs-metadata-from-symbol udef-name t)
     (sb-int:with-unique-names (val iidx slots-vec batch-idx inner-idx c-s-var)
       `(let* ((,iidx ,index)
-              (,val (if (,(udef-metadata-type-p def) ,iidx)
-                        (,(udef-metadata-store-udef def) ,iidx)
+              (,val (cond
+                      ((,(udef-metadata-type-p def) ,iidx)
+                        (,(udef-metadata-store-udef def) ,iidx))
+                      ((typep ,iidx `(unsigned-byte ,,(udef-metadata-max-bits def)))
+                       ,iidx)
+                      (t
                         (error "wrong input ~s, expect ~s udef"
-                               ,iidx ',(cs-meta-udef c-s))))
+                               ,iidx ',(cs-meta-udef c-s)))))
               (,c-s-var (load-time-col-struct ',udef-name))
               (,slots-vec (load-time-slot-vector ',udef-name)))
          (declare (ignorable ,c-s-var))
@@ -873,7 +882,9 @@
                                           (speed 3)
                                           (compilation-speed 0)
                                           (safety 1))
-                                (type (integer 0 ,(expt 2 index-bits)) ,idx)
+                                (type (or (unsigned-byte ,index-bits)
+                                          ,struct-name)
+                                      ,idx)
                                 (type udef-c-s-metadata ,where))
                        ;; TODO: provide restart for reallocation
                        (locally
@@ -913,7 +924,9 @@
                                                         ,(cs-s-bit-start slot))))))
                      ;; User-visible constructor function
                      ;; TODO: keep index gensym available in constructor?
-                     ;; now it's dropped via REST here
+                     ;; now it's dropped via REST here.
+                     ;; Perhaps via SB-UDEF-INTTYPE:INDEX instead of :INDEX or similar,
+                     ;; to mark it internal
                      (defun ,constructor-name (&key ,@ (rest maker-arg-list))
                        ,@ (rest maker-checks)
                        ;; Value before incrementing
