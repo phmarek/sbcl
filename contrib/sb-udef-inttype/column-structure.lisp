@@ -279,8 +279,9 @@
   (:method ((slot cs-mixin-udef))
     (let ((value (funcall (cs-s-init-fn slot))))
       ;; Translate to right bitmask
-      (destructuring-bind (to from) (wrappers-for-value-translation slot)
-        (funcall to value t)))
+      (multiple-value-bind (to from) (possibly-udef-value-translation slot)
+        (declare (ignore from))
+        (funcall to value t))))
   (:method ((slot cs-mixin-array))
    (funcall (cs-s-single-init-fn slot))))
 
@@ -545,17 +546,23 @@
                 dimension
                 element-udef))))))
 
-(defmethod wrappers-for-value-translation (slot)
-  (list 'identity 'identity))
 
-(defmethod wrappers-for-value-translation ((slot cs-mixin-udef))
-  (wrappers-for-value-translation
+(declaim (inline return-2nd-argument))
+(defun return-2nd-argument (a b)
+  (declare (ignore a))
+  b)
+
+(defmethod possibly-udef-value-translation (slot)
+  (values 'return-2nd-argument nil))
+
+(defmethod possibly-udef-value-translation ((slot cs-mixin-udef))
+  (possibly-udef-value-translation
     (get-udef-metadata-from-symbol
       (cs-s-udef-sym slot))))
 
-(defmethod wrappers-for-value-translation ((udef sb-impl:udef-metadata))
-  (list (sb-impl:udef-metadata-to-udef udef)
-        (sb-impl:udef-metadata-from-udef udef)))
+(defmethod possibly-udef-value-translation ((udef sb-impl:udef-metadata))
+  (values (sb-impl:udef-metadata-func udef)
+          t))
 
 
 ;; Getters --------------------------------------------------
@@ -569,13 +576,14 @@
 
 (defmethod getter-and-setter-functions ((slot cs-mixin-immediate) cs)
   (declare (ignore cs))
-  (destructuring-bind (getter setter) (wrappers-for-value-translation slot)
+  (multiple-value-bind (func) (possibly-udef-value-translation slot)
     (with-slots (accessor-sym slot-name) slot
       `((,accessor-sym (id)
            (declare (optimize (speed 3) (safety 1) (debug 1))
                     (type ,*current-cs-sym* id))
-           (,getter (ldb ',(cs-s-ldb slot)
-                         (sb-kernel:get-lisp-obj-address id))))
+           (,func :udef-or-nil-to-ub-x
+                  (ldb ',(cs-s-ldb slot)
+                       (sb-kernel:get-lisp-obj-address id))))
         ((setf ,accessor-sym) (new place)
            (declare (optimize (speed 3) (safety 1) (debug 1))
                     (type ,*current-cs-sym* place))
@@ -583,7 +591,7 @@
            ;; they're used to _address_ data and so can't be changed afterwards??!
            (let ((raw (sb-kernel:get-lisp-obj-address place)))
              (setf (ldb ',(cs-s-ldb slot) raw)
-                   (,setter new))
+                   (,func :udef-or-nil-to-ub-x new))
              (setf place
                    (sb-kernel:%make-lisp-obj raw)))
            new)))))
@@ -594,7 +602,7 @@
                            (cs-meta-udef c-s))))
     (sb-int:with-unique-names (iidx input-index slots-vec batch-var batch-idx inner-idx)
       `(let* ((,iidx ,input)
-              (,input-index (cond ((,(udef-metadata-type-p input-udef-def) ,iidx)
+              (,input-index (cond ((,(udef-metadata-func input-udef-def) :typep ,iidx)
                                    (,(cs-s-accessor-sym
                                        (aref (cs-meta-slots c-s)
                                              0))
@@ -623,7 +631,7 @@
 
 (defmethod getter-and-setter-functions ((slot cs-mixin-array) cs)
   (with-slots (accessor-sym slot-name) slot
-    (destructuring-bind (reader store) (wrappers-for-value-translation slot)
+    (multiple-value-bind (func translate?) (possibly-udef-value-translation slot)
       `((,accessor-sym (id &key start end index (mode :displaced))
         (declare (optimize (speed 3) (safety 1) (debug 3))
                  (type ,*current-cs-sym* id))
@@ -638,8 +646,8 @@
               (assert (typep end `(or null
                                      (integer ,(or start 0) ,max-len))))
               (if index
-                  (values (,reader
-                            (aref vec (+ idx index))))
+                  (values (,func :int-to-tagged-udef
+                                 (aref vec (+ idx index))))
                   (let* ((real-start (+ idx (or start 0)))
                          (real-end (+ idx (or end max-len)))
                          (len (- real-end real-start)))
@@ -650,21 +658,26 @@
                                           :element-type ',(cs-s-storage-type slot)
                                           :displaced-to vec
                                           :displaced-index-offset real-start)))
-                            (if (eq 'identity reader)
-                                backend-data
+                            (if translate?
                                 ;; TODO: How to get changes reflected into the original
                                 ;; if there's a translation, eg. for an UDEF??
                                 `(make-array len
                                              :element-type ',(cs-s-array-el-type slot)
                                              :initial-contents
-                                             (map 'list #' ,reader ,backend-data))))))
+                                             (map 'list
+                                                  (lambda (x)
+                                                    (,func :ub-x-to-udef-or-nil x))
+                                                  ,backend-data))
+                                backend-data))))
                       (:subseq
                        (values
                          ,(let ((backend-data  `(subseq vec real-start real-end)))
-                            (if (eq 'identity reader)
-                                backend-data
+                            (if translate?
                                 `(map `(array ,',(cs-s-array-el-type slot) ,len)
-                                     #' ,reader ,backend-data)))))))))))
+                                      (lambda (x)
+                                        (,func :ub-x-to-udef-or-nil x))
+                                      ,backend-data)
+                                backend-data))))))))))
       ((setf ,accessor-sym) (new id &key start end index)
         (declare (optimize (speed 3) (safety 1) (debug 3))
                  (type ,*current-cs-sym* id))
@@ -680,7 +693,7 @@
                                       (integer ,(or start 0) ,max-len))))
               (if index
                   (setf (aref vec (+ index idx))
-                        (,store new))
+                        (,func :udef-or-nil-to-ub-x new))
                   (let* ((real-start (+ idx (or start 0)))
                          (real-end (+ idx (or end max-len)))
                          #+(or)
@@ -688,7 +701,7 @@
                     (loop for el across new
                           for i upfrom real-start below real-end
                           do (setf (aref vec i)
-                                   (,store el)))
+                                   (,func :udef-or-nil-to-ub-x el)))
                     #+(or) ;; TODO: with a MAP for translation faster than a loop?
                     (replace
                       (make-array len
@@ -700,7 +713,7 @@
 
 
 (defmethod getter-and-setter-functions ((slot cs-mixin-vector-storage-slot) cs)
-  (destructuring-bind (reader store) (wrappers-for-value-translation slot)
+  (multiple-value-bind (func) (possibly-udef-value-translation slot)
     (with-slots (accessor-sym slot-name) slot
       `((,accessor-sym (id)
           (declare (optimize (speed 3) (safety 1) (debug 3))
@@ -708,7 +721,7 @@
           ,(setup-slot-vector-addressing
              (get-cs-metadata-from-symbol *current-cs-sym*)
              slot 'id 'vec 'idx
-             `(,reader (aref vec idx))))
+             `(,func :ub-x-to-udef-or-nil (aref vec idx))))
         ((setf ,accessor-sym) (new id)
           (declare (optimize (speed 3) (safety 1) (debug 3))
                    (type ,*current-cs-sym* id))
@@ -716,7 +729,7 @@
              (get-cs-metadata-from-symbol *current-cs-sym*)
              slot 'id 'vec 'idx
              `(setf (aref vec idx)
-                    (,store new))))))))
+                    (,func :udef-or-nil-to-ub-x new))))))))
 
 
 (defmacro value-before-incf (place &optional (count 1))
@@ -768,8 +781,7 @@
                ;; TODO: doesn't work on arrays-of-arrays and similar
                (let ((var-len (and (symbolp arr-len)
                                    arr-len)))
-                 (destructuring-bind (reader store) (wrappers-for-value-translation arr-udef)
-                   (declare (ignore reader))
+                 (multiple-value-bind (func) (possibly-udef-value-translation arr-udef)
                    (multiple-value-bind (single-init vec-init)
                        (cond
                          ((and (consp init)
@@ -778,11 +790,11 @@
                             (declare (ignore m-a len))
                             (when initial-contents
                               (error "C-S init for :initial-contents NIY, in ~s" *current-cs-sym*))
-                            (values `(,store ,initial-element)
+                            (values `(,func :udef-or-nil-to-ub-x ,initial-element)
                                     `(error "not used?? 713")
                                     init)))
                          (t
-                          (values `(,store ,init)
+                          (values `(,func :udef-or-nil-to-ub-x ,init)
                                   `(make-array
                                      (list ,arr-len)
                                      :element-type '(or null ,arr-element-type)
@@ -867,7 +879,7 @@
 
 (defmethod create-form-for_with-cs (cs udef-input name (slot cs-mixin-immediate) body)
   (let ((fn (sb-int:gensymify* (cs-s-slot-name slot)))
-        (typep-fn (sb-impl:udef-metadata-type-p
+        (func (sb-impl:udef-metadata-func
                     (get-udef-metadata-from-symbol
                       (cs-meta-udef cs))))
         (slot-udef (get-udef-metadata-from-symbol (cs-s-udef-sym slot))))
@@ -876,7 +888,7 @@
          ((,fn ()
             (cond
               ;; For correct udef extract
-              ((,typep-fn ,udef-input)
+              ((,func :typep ,udef-input)
                (ldb ,(cs-s-ldb slot)
                     (sb-kernel:get-lisp-obj-address ,udef-input)))
               ;; fetch from UNSIGNED-BYTE value
@@ -886,23 +898,12 @@
                        (list typ l (- s sb-impl::+udef-reserved-low-bits+)))
                     (sb-kernel:get-lisp-obj-address ,udef-input))))
             ((setf ,fn) (new)
-                        (if (,typep-fn ,udef-input)
+                        (if (,func :typep ,udef-input)
                             (setf (ldb ,(cs-s-ldb slot) ,udef-input)
                                   new)
                             (error "SETF of immediate slots only for UDEFs.")))))
        (symbol-macrolet ((,name () (,fn)))
          ,@ body))))
-
-#+(or)
-(defmethod create-form-for_with-cs (cs udef-input name (slot cs-s-imm-udef) body)
-  (let ((to-storage (sb-int:gensymify* (cs-s-slot-name slot) :-store))
-        (from-storage (sb-int:gensymify* (cs-s-slot-name slot) :-read))
-        (sym (gensym)))
-    (call-next-method cs udef-input sym slot
-                      `(flet ( ,@(wrappers-for-value-translation slot to-storage from-storage)
-                               (symbol-macrolet ((,name ,sym))
-                                 ,@body))))))
-
 
 ;; Hook into CL:WITH-SLOTS?
 ;; sb-mop:slot-value-using-class?
@@ -914,7 +915,7 @@
     (sb-int:with-unique-names (iidx val slots-vec batch-idx inner-idx c-s-var)
       `(let* ((,iidx ,index)
               (,val (cond
-                      ((,(udef-metadata-type-p def) ,iidx)
+                      ((,(udef-metadata-func def) :typep ,iidx)
                         (,(cs-s-accessor-sym
                             (aref (cs-meta-slots c-s)
                                   0))
@@ -961,13 +962,14 @@
 ;; ------------------------------------------------------------
 
 
-(defun make-udef-with-immediate-slots-form (to-udef-sym slots)
-  `(,to-udef-sym (logior
-                   ,@ (loop for slot across slots
-                            when (typep slot 'cs-mixin-immediate)
-                            collect `(ash ,(cs-s-slot-name slot)
-                                          ,(- (cs-s-bit-start slot)
-                                              sb-impl::+udef-reserved-low-bits+))))))
+(defun make-udef-with-immediate-slots-form (udef-func slots)
+  `(,udef-func :int-to-tagged-udef
+               (logior
+                 ,@ (loop for slot across slots
+                          when (typep slot 'cs-mixin-immediate)
+                          collect `(ash ,(cs-s-slot-name slot)
+                                        ,(- (cs-s-bit-start slot)
+                                            sb-impl::+udef-reserved-low-bits+))))))
 
 
 (defmacro def-column-struct (name-and-options &rest slot-definitions)
@@ -1140,7 +1142,7 @@
                        (when (>= ,up-to (column-struct-size ,where))
                          (error "Cannot resize ~s" ',*current-cs-sym*))
                        (let ((,tmp ,(make-udef-with-immediate-slots-form
-                                      (udef-metadata-to-udef udef)
+                                      (udef-metadata-func udef)
                                       slots)))
                          ;; Generate SETFs for column-struct slots
                          ,@(loop for slot across slots
@@ -1244,7 +1246,9 @@
           for i upfrom 0
           ;; Not a BELOW, because the size may change during iteration
           while (< i max)
-          for u = (funcall (udef-metadata-to-udef udef) i)
+          for u = (funcall (udef-metadata-func udef)
+                           :int-to-tagged-udef
+                           i)
           collect (funcall fn u))))
 
 ;; TODO: only map really used entries? WITH-BATCH-MACRO might skip some. need a PK?
@@ -1254,7 +1258,9 @@
     (loop for i upfrom 0
           ;; Not a BELOW, because the size may change during iteration
           while (< i (column-struct-last-index c-s))
-          collect (funcall (udef-metadata-to-udef udef) i))))
+          collect (funcall (udef-metadata-func udef)
+                           :int-to-tagged-udef
+                           i))))
 
 ;; TODO: only immediate slots → no index column, or width 0?
 

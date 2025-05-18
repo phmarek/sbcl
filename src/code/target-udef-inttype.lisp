@@ -148,44 +148,38 @@
 (defstruct udef-metadata
   (udef-id        0 :type (integer 0 255) :read-only t)
   ;; A slot called TYPEP doesn't work with default args in DEFSTRUCT
-  (type-p       nil :type symbol          :read-only t)
-  (to-udef      nil :type symbol          :read-only t)
+  (func         nil :type symbol          :read-only t)
   (from-udef    nil :type symbol          :read-only t)
+  (nil?           t :type (member t nil)  :read-only t)
   (max-bits       0 :type (integer 1 48)  :read-only t))
 
-(defun get-existing-udef-f-t-p-b (name)
-  "Returns the ID,
-  the from-udef, to-udef, and TYPEP functions,
-  and the number of bits
+(defun get-existing-udef-func (name)
+  "Returns the function symbol, the ID, and the number of bits
   as multiple values if NAME is a defined UDEF."
   (let* ((prev-def% (get name 'udef-metadata))
          (prev-def (when (udef-metadata-p prev-def%)
                         prev-def%)))
-    (values (or (and prev-def (udef-metadata-udef-id   prev-def))
+    (values (and prev-def (udef-metadata-func      prev-def))
+            (or (and prev-def (udef-metadata-udef-id   prev-def))
                 (get-existing-udef-id name))
-            (and prev-def (udef-metadata-from-udef prev-def))
-            (and prev-def (udef-metadata-to-udef   prev-def))
-            (and prev-def (udef-metadata-type-p    prev-def))
             (and prev-def (udef-metadata-max-bits  prev-def)))))
 
 (export '( udef-metadata
            udef-metadata-udef-id
-           udef-metadata-from-udef
-           udef-metadata-to-udef
+           udef-metadata-func
            udef-metadata-udef-sym
-           udef-metadata-type-p
            udef-metadata-max-bits
            make-twice-tagged-udef
            check-tagged-udef-value
-           get-existing-udef-f-t-p-b))
+           get-existing-udef-func))
 
-(defmacro def-udef-inttype (name &key id
-                                 to-udef from-udef typep
+(defmacro def-udef-inttype (name &key id func-sym
                                  (nil-as-minus-1 t)
                                  (max-bits +udef-usable-remaining-bits+))
   "Defines a new user-defined integer type."
-  (multiple-value-bind (old-id)
-      (get-existing-udef-f-t-p-b name)
+  (multiple-value-bind (func old-id)
+      (get-existing-udef-func name)
+    (declare (ignore func))
     (let* ((id (cond
                  ((and old-id       id  (= old-id id))  id)
                  ((and (not old-id) id)                 id)
@@ -193,13 +187,10 @@
                  (t
                   (register-udef-subtype-id name))))
            (mask (1- (ash 1 max-bits)))
+           (nil? (and nil-as-minus-1 t))
            ;; TODO: use *PACKAGE* instead of the NAMEs package?
-           (typep-fn (or typep
-                         (sb-int:symbolicate name :-P)))
-           (from-udef-fn (or from-udef
-                             (sb-int:symbolicate name :-NUM-FROM-UDEF)))
-           (to-udef-fn (or to-udef
-                           (sb-int:symbolicate :MAKE- name :-UDEF))))
+           (func-sym (or func-sym
+                         (sb-int:symbolicate :name :-OPERATION))))
          ;; (DEBUG 1) is necessary to keep the argument and result types
          `(progn
             (eval-when (:compile-toplevel :load-toplevel :execute)
@@ -210,58 +201,34 @@
               (unless (get ',name 'udef-metadata)
                 (setf (get ',name 'udef-metadata)
                       (make-udef-metadata
-                        :udef-id ,id
-                        :to-udef  ',to-udef-fn
-                        :from-udef ',from-udef-fn
-                        :type-p ',typep-fn
+                        :udef-id  ,id
+                        :nil?     ,nil?
+                        :func     ',func-sym
                         :max-bits ,max-bits))
                 ;;
-                ;; TODO: box/unbox
-                (declaim (inline ,typep-fn)
-                         (ftype (function (T) (member t nil)) ,typep-fn))
-                (defun ,typep-fn (x)
-                  (declare (optimize (speed 3) (debug 0) (safety 0)))
-                  (when (is-tagged-udef-value ,id x)
-                    t))
-                ;;
-                ;; From integer (index) to UDEF.
-                ;; An incoming NIL gets translated to -1, if so allowed.
-                (declaim (inline ,to-udef-fn)
-                         (ftype (function ( ,(if nil-as-minus-1
-                                                 `(or (integer 0 ,mask)
-                                                      null)
-                                                 `(integer 0 ,mask))
-                                            &optional (member t nil))
-                                          ,name)
-                                ,to-udef-fn))
-                (defun ,to-udef-fn (x &optional num-only)
-                  (declare (optimize (speed 3) (debug 1) (safety 1))
-                           (type (or null
-                                     (unsigned-byte ,max-bits)) x))
-                  (let ((num (if (and ,(and nil-as-minus-1 t)
-                                      (eq x nil))
-                                 ,mask
-                                 x)))
-                    (if num-only
-                        num
-                        (make-twice-tagged-udef ,id num))))
-                ;;
-                (declaim (inline ,from-udef-fn)
-                         (ftype (function (,name &optional (member t nil))
-                                          (values (or (integer 0 ,mask)
-                                                      ,@(when nil-as-minus-1
-                                                          `(null)) )))
-                                ,from-udef-fn))
-                ;; When writing integers into specialized arrays,
-                ;; we need the -1 representation.
-                (defun ,from-udef-fn (x &optional keep-minus-1-representation)
-                  (declare (optimize (speed 3) (debug 1) (safety 1)))
-                  (let ((num (is-tagged-udef-value ,id x)))
-                    (if (and ,(and nil-as-minus-1 t)
-                             (= num ,mask)
-                             (not keep-minus-1-representation))
-                        nil
-                        num)))))
+                (declaim (inline ,func-sym))
+                (defun ,func-sym (operation input)
+                  (ecase operation
+                    (:typep
+                     (when
+                      (is-tagged-udef-value ,id input))
+                     t)
+                    (:int-to-tagged-udef
+                     (check-type input (integer 0 ,mask))
+                     (make-twice-tagged-udef ,id input))
+                    (:tagged-udef-to-int
+                      (check-tagged-udef-value ,id input))
+                    (:udef-or-nil-to-ub-x
+                     (if (null input)
+                         (if ,nil
+                             ,mask
+                             (error "NIL not allowed for udef ~s" ',name))
+                         (check-tagged-udef-value ,id input)))
+                    (:ub-x-to-udef-or-nil
+                     (if (and nil?
+                         (= input ,mask))
+                         nil
+                         (make-twice-tagged-udef ,id input)))))))
             ;;
             (values ',name
                     ,id)))))

@@ -5,11 +5,9 @@
                 #:def-udef-inttype
                 #:udef-inttype-type-of
                 #:udef-metadata
-                #:udef-metadata-from-udef
-                #:udef-metadata-to-udef
-                #:udef-metadata-type-p
+                #:udef-metadata-func
                 #:udef-metadata-max-bits
-                #:get-existing-udef-f-t-p-b
+                #:get-existing-udef-func
                 #:get-existing-udef-id
                 )
   (:export #:def-udef-inttype
