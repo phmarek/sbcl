@@ -7,8 +7,6 @@
                 #:udef-metadata
                 #:udef-metadata-from-udef
                 #:udef-metadata-to-udef
-                #:udef-metadata-store-udef
-                #:udef-metadata-retr-udef
                 #:udef-metadata-type-p
                 #:udef-metadata-max-bits
                 #:get-existing-udef-f-t-p-b
