@@ -151,9 +151,6 @@
   (type-p       nil :type symbol          :read-only t)
   (to-udef      nil :type symbol          :read-only t)
   (from-udef    nil :type symbol          :read-only t)
-  ;; Produces an integer like FROM-UDEF, but NIL gets translated to -1(mod).
-  (store-udef   nil :type symbol          :read-only t)
-  (retr-udef    nil :type symbol          :read-only t)
   (max-bits       0 :type (integer 1 48)  :read-only t))
 
 (defun get-existing-udef-f-t-p-b (name)
@@ -175,8 +172,6 @@
            udef-metadata-udef-id
            udef-metadata-from-udef
            udef-metadata-to-udef
-           udef-metadata-store-udef
-           udef-metadata-retr-udef
            udef-metadata-udef-sym
            udef-metadata-type-p
            udef-metadata-max-bits
@@ -185,8 +180,7 @@
            get-existing-udef-f-t-p-b))
 
 (defmacro def-udef-inttype (name &key id
-                                 to-udef from-udef
-                                 retr-udef store-udef typep
+                                 to-udef from-udef typep
                                  (nil-as-minus-1 t)
                                  (max-bits +udef-usable-remaining-bits+))
   "Defines a new user-defined integer type."
@@ -202,15 +196,10 @@
            ;; TODO: use *PACKAGE* instead of the NAMEs package?
            (typep-fn (or typep
                          (sb-int:symbolicate name :-P)))
-           (retr-fn (or retr-udef
-                         (sb-int:symbolicate name :-RETRIEVE)))
-           (store-fn (or store-udef
-                         (sb-int:symbolicate name :-STORE)))
-           ;; these two still needed?
            (from-udef-fn (or from-udef
                              (sb-int:symbolicate name :-NUM-FROM-UDEF)))
            (to-udef-fn (or to-udef
-                           (sb-int:symbolicate :MAKE- name))))
+                           (sb-int:symbolicate :MAKE- name :-UDEF))))
          ;; (DEBUG 1) is necessary to keep the argument and result types
          `(progn
             (eval-when (:compile-toplevel :load-toplevel :execute)
@@ -224,8 +213,6 @@
                         :udef-id ,id
                         :to-udef  ',to-udef-fn
                         :from-udef ',from-udef-fn
-                        :store-udef ',store-fn
-                        :retr-udef ',retr-fn
                         :type-p ',typep-fn
                         :max-bits ,max-bits))
                 ;; TODO: box/unbox
@@ -271,32 +258,7 @@
                              (not nil-to-minus-1)
                              (= num ,mask))
                         nil
-                        num)))
-                ;; For retrieving from a typed slot or array
-                (declaim (inline ,retr-fn)
-                         (ftype (function ((integer 0 ,mask))
-                                          (values (or ,name null)))
-                                ,retr-fn))
-                (defun ,retr-fn (x)
-                  (declare (optimize (speed 3) (debug 1) (safety 1)))
-                  (if (= x ,mask)
-                      nil
-                      (make-twice-tagged-udef ,id x)))
-                ;; For storing in a typed slot or array
-                #+(or)
-                (sb-c:defknown ,store-fn
-                    ((or ,name null))
-                    (values (integer 0 ,mask))
-                    (sb-c:movable sb-c:foldable sb-c:flushable)) ;fixed-args unboxed-return
-                (declaim (inline ,store-fn)
-                         (ftype (function ((or ,name null))
-                                          (values (integer 0 ,mask)))
-                                ,store-fn))
-                (defun ,store-fn (x)
-                  (declare (optimize (speed 3) (debug 1) (safety 1)))
-                  (if x
-                      (udef-general-get-value x)
-                      ,mask))))
+                        num)))))
             ;;
             (values ',name
                     ,id)))))
