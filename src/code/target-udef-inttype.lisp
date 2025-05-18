@@ -220,12 +220,12 @@
                       (check-tagged-udef-value ,id input))
                     (:udef-or-nil-to-ub-x
                      (if (null input)
-                         (if ,nil
+                         (if ,nil?
                              ,mask
                              (error "NIL not allowed for udef ~s" ',name))
                          (check-tagged-udef-value ,id input)))
                     (:ub-x-to-udef-or-nil
-                     (if (and nil?
+                     (if (and ,nil?
                          (= input ,mask))
                          nil
                          (make-twice-tagged-udef ,id input)))))))
