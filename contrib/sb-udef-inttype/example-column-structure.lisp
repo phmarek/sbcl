@@ -268,3 +268,24 @@ imm-b
   (cdr nil :type udef-cons :allocation :immediate))
 
 (defvar *leaf-1* (make-udef-cons :car nil :cdr nil))
+
+
+(sb-udef-inttype:def-column-struct (no-slot-udef
+                                     (:max-bits 2)))
+
+(progn
+  (sb-udef-inttype:column-struct-reset 'no-slot-udef)
+  (let ((a (make-no-slot-udef))
+        (b (make-no-slot-udef))
+        (c (make-no-slot-udef))
+        (d (make-no-slot-udef)))
+    (assert (eq a a))
+    (assert (not (eq a b)))
+    (assert (= 4 (length (remove-duplicates (list a b c d)))))
+    ;; TODO: make that return NIL, as per STORE and RETRIEVE?
+    ;(assert (null d))
+    (multiple-value-bind (result e)
+        (ignore-errors (make-no-slot-udef))
+      (assert (null result))
+      (assert (typep e 'type-error)))))
+

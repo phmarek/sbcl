@@ -14,7 +14,8 @@
              "Test ~s broken: got ~s, wanted ~s" ',name got want)))
 
 
-(sb-udef-inttype:def-bitfield-struct bbbits
+(sb-udef-inttype:def-column-struct (bbbits
+                                     (:index-bits 0))
   (eight 255 :type (unsigned-byte 8) :modulo t)
   (four . 4)
   (one 1 :type (unsigned-byte 1)))
