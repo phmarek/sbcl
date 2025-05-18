@@ -17,8 +17,6 @@
   (b 0 :type (unsigned-byte 16))
   (c 22 :type fixnum))
 
-(SB-UDEF-INTTYPE::EXPAND-C-S-DEFINITION FOO MAKE-FOO #:FOO-CONSTRUCTOR
-                                             NIL)
 (defparameter *no-foo* (make-foo))
 
 (foo-b *no-foo*)
@@ -41,8 +39,6 @@
 ;; Test pre-declaration, for self-referencing stuff
 (sb-udef-inttype::def-udef-inttype bar
   :to-udef to-bar-udef
-  ;:from-udef from-bar-udef
-  ;:store-udef store-a-bar
   :nil-as-minus-1 t
   :max-bits 32)
 
@@ -64,6 +60,13 @@
 ;;  (self-vec nil :type (array bar (4))) ;; TODO
   (udef *no-foo* :type foo))
 
+(SB-UDEF-INTTYPE::EXPAND-C-S-DEFINITION BAR MAKE-MY-BAR MAKE-MY-BAR-BASE
+                                             WITH-BAR-BATCH)
+
+           (funcall (sb-impl:udef-metadata-to-udef 
+                       (sb-udef-inttype::get-udef-metadata-from-symbol 'bar))
+                    (make-my-bar :vec (make-array 3 :element-type '(unsigned-byte 32)
+                                                    :initial-contents '(1 2 3))))
 
 (defun fff (bar1)
   (sb-udef-inttype::with-c-s-slots (bar bar1) (self)

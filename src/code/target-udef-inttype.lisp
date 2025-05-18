@@ -215,6 +215,7 @@
                         :from-udef ',from-udef-fn
                         :type-p ',typep-fn
                         :max-bits ,max-bits))
+                ;;
                 ;; TODO: box/unbox
                 (declaim (inline ,typep-fn)
                          (ftype (function (T) (member t nil)) ,typep-fn))
@@ -222,27 +223,29 @@
                   (declare (optimize (speed 3) (debug 0) (safety 0)))
                   (when (is-tagged-udef-value ,id x)
                     t))
+                ;;
                 ;; From integer (index) to UDEF.
                 ;; An incoming NIL gets translated to -1, if so allowed.
                 (declaim (inline ,to-udef-fn)
                          (ftype (function ( ,(if nil-as-minus-1
                                                  `(or (integer 0 ,mask)
                                                       null)
-                                                 `(integer 0 ,mask)) )
+                                                 `(integer 0 ,mask))
+                                            &optional (member t nil))
                                           ,name)
                                 ,to-udef-fn))
-                (defun ,to-udef-fn (x)
+                (defun ,to-udef-fn (x &optional num-only)
                   (declare (optimize (speed 3) (debug 1) (safety 1))
                            (type (or null
                                      (unsigned-byte ,max-bits)) x))
-                  (make-twice-tagged-udef ,id
-                                          (if (and ,(and nil-as-minus-1 t)
-                                                        (eq x nil))
-                                                   ,mask
-                                                   x)))
-                ;; From a (boxed) UDEF to an integer (index).
-                ;; A stored -1 may get translated to NIL.
-                ;; When initializing a typed slot or array, an incoming
+                  (let ((num (if (and ,(and nil-as-minus-1 t)
+                                      (eq x nil))
+                                 ,mask
+                                 x)))
+                    (if num-only
+                        num
+                        (make-twice-tagged-udef ,id num))))
+                ;;
                 (declaim (inline ,from-udef-fn)
                          (ftype (function (,name &optional (member t nil))
                                           (values (or (integer 0 ,mask)
@@ -251,12 +254,12 @@
                                 ,from-udef-fn))
                 ;; When writing integers into specialized arrays,
                 ;; we need the -1 representation.
-                (defun ,from-udef-fn (x &optional nil-to-minus-1)
+                (defun ,from-udef-fn (x &optional keep-minus-1-representation)
                   (declare (optimize (speed 3) (debug 1) (safety 1)))
-                  (let ((num (udef-general-get-value x)))
+                  (let ((num (is-tagged-udef-value ,id x)))
                     (if (and ,(and nil-as-minus-1 t)
-                             (not nil-to-minus-1)
-                             (= num ,mask))
+                             (= num ,mask)
+                             (not keep-minus-1-representation))
                         nil
                         num)))))
             ;;

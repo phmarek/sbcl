@@ -172,6 +172,18 @@
 
 ;; ------------------------------------------------------------
 
+(defvar *slot-nr* nil
+  "Used to number the slots during parsing")
+(defvar *bit-index* nil
+  "Used to count used immediate bits during parsing")
+(defvar *current-cs-sym* nil
+  "The symbol we're defining a C-S on.")
+(defvar *current-cs-size* nil
+  "The number of bits for the current C-S.")
+
+;; ------------------------------------------------------------
+
+
 (defun get-udef-metadata-from-symbol (sym)
   (let ((v (and
              (symbolp sym)
@@ -235,13 +247,11 @@
   (:method ((slot cs-slot-common))
     (cs-s-orig-type slot))
   (:method ((slot cs-mixin-udef))
-    #+(or)
-    (cs-s-storage-type
-      (cs-s-udef-sym slot))
     (cs-s-u-slot-type slot))
+  (:method ((u (eql :current)))
+    `(unsigned-byte ,*current-cs-size*))
   (:method ((u udef-metadata))
-    `(unsigned-byte
-       ,(udef-metadata-max-bits u)))
+    `(unsigned-byte ,(udef-metadata-max-bits u)))
   (:method ((slot cs-mixin-immediate))
     (error "no storage for immediate"))
   (:method ((slot cs-mixin-array))
@@ -267,13 +277,13 @@
   (:method ((slot cs-slot-common))
     (funcall (cs-s-init-fn slot)))
   (:method ((slot cs-mixin-udef))
-    (let* ((udef (cs-s-udef-sym slot))
-           (u-meta (get-udef-metadata-from-symbol udef))
-           (store-fn (sb-impl:udef-metadata-from-udef u-meta)))
-      (funcall store-fn
-               (funcall (cs-s-init-fn slot)))))
+    (let ((value (funcall (cs-s-init-fn slot))))
+      ;; Translate to right bitmask
+      (destructuring-bind (to from) (wrappers-for-value-translation slot)
+        (funcall to value t)))
   (:method ((slot cs-mixin-array))
    (funcall (cs-s-single-init-fn slot))))
+
 
 
 ;(declaim (inline get-new-id-range))
@@ -548,14 +558,6 @@
         (sb-impl:udef-metadata-from-udef udef)))
 
 
-(defvar *slot-nr* nil
-  "Used to number the slots during parsing")
-(defvar *bit-index* nil
-  "Used to count used immediate bits during parsing")
-(defvar *current-cs-sym* nil
-  "The symbol we're defining a C-S on.")
-
-
 ;; Getters --------------------------------------------------
 ;;
 ;; TODO: check-type
@@ -747,7 +749,8 @@
                            (numberp (second user-type)))
                       (second user-type))
                      ((eq user-type *current-cs-sym*)
-                      'this-size)
+                      (setf meta :current)
+                      *current-cs-size*)
                      (t
                       (error ":ALLOCATION :IMMEDIATE only allowed for (UNSIGNED-BYTE x) or UDEF types")))
                    (values (list (if meta
@@ -1009,6 +1012,7 @@
              (max-bits (or (option :max-bits nil)
                            index-bits
                            32))
+             (*current-cs-size* max-bits)
              ;;
              (base-constructor (option :base-constructor (sb-int:gensymify* struct-name :-constructor)))
              ;;
@@ -1030,7 +1034,8 @@
              (vector-storage-slot-count (count-if #'identity user-slots-use-vector-storage?))
              ;;
              (needs-index-slot (or index-bits
-                                   (plusp vector-storage-slot-count)))
+                                   (plusp vector-storage-slot-count)
+                                   (null user-slots)))
              (all-slots (if needs-index-slot
                             (list* (get-slot-def `(,index-name 0
                                                                :type (unsigned-byte ,(or index-bits 32))
@@ -1046,7 +1051,6 @@
            (eval-when (:compile-toplevel :load-toplevel :execute)
              (def-udef-inttype ,struct-name
                           :max-bits ,max-bits
-               ;; Avoid conflicts with MAKE- function
                           ;; NIL gets stored in U-B columns as -1 (mod bits) values
                           ; TODO configurable?
                           :nil-as-minus-1 t)
@@ -1054,7 +1058,7 @@
              ;; TODO: loses value upon reload, keep old contents?
              (sb-vm:without-arena
                (setf (get ',struct-name 'column-struct-data)
-                     (let ((*bit-index* 0)
+                     (let ((*bit-index* sb-impl::+udef-reserved-low-bits+)
                            (*slot-nr* 0)
                            (this-size ,max-bits))
                        (declare (ignorable this-size))
@@ -1107,8 +1111,8 @@
                                         (speed 1)
                                         (compilation-speed 0)
                                         (safety 1)))
-                     ,(when (plusp (cs-meta-vec-slot-count cs))
-                        `(declare (ignorable ,(first slot-names))))
+                     ;;D; ,(when (plusp (cs-meta-vec-slot-count cs))
+                     ;;D;    `(declare (ignorable ,(first slot-names))))
                      ;; TODO: provide restart for reallocation
                      (let* ((,where (load-time-col-struct ',*current-cs-sym*))
                             ;; Make numeric index available via correct name
@@ -1116,7 +1120,7 @@
                                          (cs-meta-var-len-slot cs))
                                        1))
                             ;; For a variable-length allocation, we need that much free space
-                            (,up-to (+ ,numeric-index ,len)))
+                            (,up-to (+ ,(first slot-names) ,len)))
                        (declare (notinline column-struct-size)
                                 (type udef-c-s-metadata ,where))
                        (loop for ,old-size = (column-struct-size ,where)
