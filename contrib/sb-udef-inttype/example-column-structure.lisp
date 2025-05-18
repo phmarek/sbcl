@@ -17,6 +17,8 @@
   (b 0 :type (unsigned-byte 16))
   (c 22 :type fixnum))
 
+(SB-UDEF-INTTYPE::EXPAND-C-S-DEFINITION FOO MAKE-FOO #:FOO-CONSTRUCTOR
+                                             NIL)
 (defparameter *no-foo* (make-foo))
 
 (foo-b *no-foo*)
