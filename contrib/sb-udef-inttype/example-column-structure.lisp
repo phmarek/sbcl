@@ -38,7 +38,6 @@
 
 ;; Test pre-declaration, for self-referencing stuff
 (sb-udef-inttype::def-udef-inttype bar
-  :to-udef to-bar-udef
   :nil-as-minus-1 t
   :max-bits 32)
 

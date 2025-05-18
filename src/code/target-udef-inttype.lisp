@@ -149,7 +149,6 @@
   (udef-id        0 :type (integer 0 255) :read-only t)
   ;; A slot called TYPEP doesn't work with default args in DEFSTRUCT
   (func         nil :type symbol          :read-only t)
-  (from-udef    nil :type symbol          :read-only t)
   (nil?           t :type (member t nil)  :read-only t)
   (max-bits       0 :type (integer 1 48)  :read-only t))
 
@@ -190,7 +189,7 @@
            (nil? (and nil-as-minus-1 t))
            ;; TODO: use *PACKAGE* instead of the NAMEs package?
            (func-sym (or func-sym
-                         (sb-int:symbolicate :name :-OPERATION))))
+                         (sb-int:symbolicate :UDEF/ name :-OPERATION))))
          ;; (DEBUG 1) is necessary to keep the argument and result types
          `(progn
             (eval-when (:compile-toplevel :load-toplevel :execute)

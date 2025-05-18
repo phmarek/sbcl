@@ -279,9 +279,8 @@
   (:method ((slot cs-mixin-udef))
     (let ((value (funcall (cs-s-init-fn slot))))
       ;; Translate to right bitmask
-      (multiple-value-bind (to from) (possibly-udef-value-translation slot)
-        (declare (ignore from))
-        (funcall to value t))))
+      (multiple-value-bind (func) (possibly-udef-value-translation slot)
+        (funcall func :udef-or-nil-to-ub-x value))))
   (:method ((slot cs-mixin-array))
    (funcall (cs-s-single-init-fn slot))))
 
