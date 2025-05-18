@@ -59,14 +59,6 @@
 ;;  (self-vec nil :type (array bar (4))) ;; TODO
   (udef *no-foo* :type foo))
 
-(SB-UDEF-INTTYPE::EXPAND-C-S-DEFINITION BAR MAKE-MY-BAR MAKE-MY-BAR-BASE
-                                             WITH-BAR-BATCH)
-
-           (funcall (sb-impl:udef-metadata-to-udef
-                       (sb-udef-inttype::get-udef-metadata-from-symbol 'bar))
-                    (make-my-bar :vec (make-array 3 :element-type '(unsigned-byte 32)
-                                                    :initial-contents '(1 2 3))))
-
 (defun fff (bar1)
   (sb-udef-inttype::with-c-s-slots (bar bar1) (self)
     self))
@@ -121,7 +113,7 @@
 
 ;;; Test code
 
-(defun thread-do (n &key verbose sem &aux (prev (to-bar-udef 0)))
+(defun thread-do (n &key verbose sem &aux (prev (udef/bar-operation :int-to-tagged-udef 0)))
   #+(or)
   (princ
     (format nil "~a starting up~%"
@@ -158,7 +150,8 @@
                     (logand v #xffff))
                  (let ((s (bar-self b)))
                    (or (null s)
-                       (bar-p s))))
+                       (udef/bar-operation :typep s)
+                       (error "not a bar"))))
       (error "data broken: ~s  #x~x instead of a BAR"
              b v))))
 
