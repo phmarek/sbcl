@@ -122,7 +122,7 @@
 (defun check-tagged-udef-value (tag udef)
   (declare (optimize (speed 3) (debug 0) (safety 1)))
   (or (is-tagged-udef-value tag udef)
-      (error "need a udef with tag ~d, not a ~s" tag udef)))
+      (error "need a udef with tag #x~x, not a ~s" tag udef)))
 
 (declaim (ftype (function (T)
                           (values symbol
