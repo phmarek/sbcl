@@ -62,6 +62,7 @@
   (next              0 :type sb-vm:word)
   (allocated         0 :type sb-vm:word)
   (as-alist        nil :type symbol          :read-only t)
+  (p-function      nil :type symbol          :read-only t)
   (batch-size      nil :type (or null
                                  ;; should actually start at 1000 or so,
                                  ;; but race tests run with small increments
@@ -81,7 +82,8 @@
 
 (defun find-slot-by-name (c-s slot-name)
   (find slot-name
-        (if (consp c-s)
+        (if (or (listp c-s)
+                (vectorp c-s))
             c-s
             (cs-meta-slots (if (symbolp c-s)
                                (get-cs-metadata-from-symbol c-s)
@@ -849,19 +851,19 @@
                                             ,init))
                           :allow-other-keys t))))))
 
-(defun check-var-len-slots (slots)
+(defun check-var-len-slots (slot-defs)
   ;; all slots with same variable length multiple
-  (let ((var-len-args (remove nil
-                              (map 'list
-                                   (lambda (slot)
-                                     (when (typep slot 'cs-mixin-variable-sized-array)
-                                       (cs-s-array-len-var slot)))
-                                   slots))))
+  (let ((var-len-args (mapcan (lambda (slot)
+                                (when (slot-def-has-some-mixin? slot 'cs-mixin-variable-sized-array)
+                                  (list 
+                                    (second ; the symbol is quoted!
+                                      (getf (nthcdr 2 slot)
+                                            :array-len-var)))))
+                              slot-defs)))
     (when (> (length var-len-args) 1)
-      (unless (and (apply #'eq var-len-args)
-                   (find-slot-by-name (first var-len-args) slots))
+      (unless (apply #'eq var-len-args)
         (error "All slots with variable length vectors must use the same symbol for the length,~
-               and it must be defined as an slot (possibly with :ALLOCATION :IMMEDIATE).")))
+               and this must be defined as an slot (possibly with :ALLOCATION :IMMEDIATE).")))
     (first var-len-args)))
 
 ;; ------------------------------------------------------------
@@ -1014,6 +1016,7 @@
                            index-bits
                            32))
              (*current-cs-size* max-bits)
+             (tmp (sb-int:gensymify* :tmp)) 
              ;;
              (base-constructor (option :base-constructor (sb-int:gensymify* struct-name :-constructor)))
              ;;
@@ -1023,6 +1026,7 @@
                                                (symbol-package struct-name))))
              ;;
              (as-alist-sym (sb-int:gensymify* struct-name :-as-alist))
+             (p-func-sym (sb-int:gensymify* struct-name :-p))
              ;;
              ;;
              (user-slots (let ((*slot-nr* 0))
@@ -1033,6 +1037,7 @@
                          (slot-def-has-some-mixin? s 'cs-mixin-vector-storage-slot))
                        user-slots))
              (vector-storage-slot-count (count-if #'identity user-slots-use-vector-storage?))
+             (var-len-sym (check-var-len-slots user-slots))
              ;;
              (needs-index-slot (or index-bits
                                    (plusp vector-storage-slot-count)
@@ -1059,20 +1064,24 @@
              ;; TODO: loses value upon reload, keep old contents?
              (sb-vm:without-arena
                (setf (get ',struct-name 'column-struct-data)
-                     (let ((*bit-index* sb-impl::+udef-reserved-low-bits+)
-                           (*slot-nr* 0)
-                           (this-size ,max-bits))
+                     (let* ((*bit-index* sb-impl::+udef-reserved-low-bits+)
+                            (*slot-nr* 0)
+                            (,tmp (vector ,@ all-slots))
+                            (this-size ,max-bits))
                        (declare (ignorable this-size))
                        (make-udef-c-s-metadata
                          :udef          ',struct-name
                          :batch-size    ,batch-size
-                         :slots         (vector ,@ all-slots)
+                         :slots         ,tmp
+                         :var-len-slot  ,(when var-len-sym
+                                           `(find-slot-by-name ,tmp ',var-len-sym))
                          :has-index-slot ,(and needs-index-slot t)
                          :vec-slot-count ,vector-storage-slot-count
                          :data-vec      (vector ,@(loop repeat vector-storage-slot-count
                                                         collect #()))
+                         :p-function    ',p-func-sym
                          :as-alist      ',as-alist-sym))))
-             (eval-when (:compile-toplevel :load-toplevel :execute)
+             (progn ;eval-when (:compile-toplevel :load-toplevel :execute)
                ;;
                ;; This macro has actual structures to query
                (expand-c-s-definition ,struct-name
@@ -1087,8 +1096,7 @@
 
 (defmacro expand-c-s-definition (*current-cs-sym* constructor-name base-constructor with-batch-macro)
   (multiple-value-bind (cs udef) (get-cs-metadata-from-symbol *current-cs-sym* t)
-    (with-slots (as-alist batch-size slots) cs
-      (check-var-len-slots slots)
+    (with-slots (as-alist p-function batch-size slots) cs
       (loop for slot across slots
             for slot-name = (cs-s-slot-name slot)
             collect slot-name into slot-names
@@ -1167,6 +1175,10 @@
                        (,base-constructor ,numeric-index
                                           ,@ (rest slot-names))))
                    ;;
+                   ;;
+                   (declaim (inline ,p-function))
+                   (defun ,p-function (,tmp)
+                     (,(udef-metadata-func udef) :type-p ,tmp))
                    ;;
                    (defun ,as-alist (,tmp)
                      ;; Don't report the index
