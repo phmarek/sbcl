@@ -61,6 +61,7 @@
   (udef            nil :type symbol          :read-only t)
   (next              0 :type sb-vm:word)
   (allocated         0 :type sb-vm:word)
+  (index-bits        0 :type (integer 1 48))
   (as-alist        nil :type symbol          :read-only t)
   (p-function      nil :type symbol          :read-only t)
   (batch-size      nil :type (or null
@@ -181,7 +182,7 @@
 (defvar *current-cs-sym* nil
   "The symbol we're defining a C-S on.")
 (defvar *current-cs-size* nil
-  "The number of bits for the current C-S.")
+  "The number of _index_ bits for the current C-S.")
 
 ;; ------------------------------------------------------------
 
@@ -252,6 +253,8 @@
     (cs-s-u-slot-type slot))
   (:method ((u (eql :current)))
     `(unsigned-byte ,*current-cs-size*))
+  (:method ((c udef-c-s-metadata))
+    `(unsigned-byte ,(cs-meta-index-bits c)))
   (:method ((u udef-metadata))
     `(unsigned-byte ,(udef-metadata-max-bits u)))
   (:method ((slot cs-mixin-immediate))
@@ -542,10 +545,9 @@
       (when (member kind '(array simple-array))
         (multiple-value-bind (c-s element-udef)
             (get-cs-metadata-from-symbol element-type)
-          (declare (ignore c-s))
           (list element-type
                 dimension
-                element-udef))))))
+                c-s element-udef))))))
 
 
 (declaim (inline return-2nd-argument))
@@ -582,7 +584,7 @@
       `((,accessor-sym (id)
            (declare (optimize (speed 3) (safety 1) (debug 1))
                     (type ,*current-cs-sym* id))
-           (,func :udef-or-nil-to-ub-x
+           (,func :ub-x-to-udef-or-nil
                   (ldb ',(cs-s-ldb slot)
                        (sb-kernel:get-lisp-obj-address id))))
         ((setf ,accessor-sym) (new place)
@@ -748,14 +750,15 @@
 (defun get-slot-def (input)
   (multiple-value-bind (name init user-type allocation) (parse-slot input)
     (multiple-value-bind (c-s meta) (get-cs-metadata-from-symbol user-type)
-      (declare (ignore c-s))
-      (destructuring-bind (&optional arr-element-type arr-len arr-udef)
+      (destructuring-bind (&optional arr-element-type arr-len arr-cs arr-udef)
           (is-simple-1dim-array user-type)
         (multiple-value-bind (type+args init-fn-args)
             (cond
               ((eq allocation :immediate)
                (multiple-value-bind (bits)
                    (cond
+                     (c-s
+                      (cs-meta-index-bits c-s))
                      (meta
                       (udef-metadata-max-bits meta))
                      ((and (consp user-type)
@@ -833,10 +836,10 @@
                           ;; for CS-S-UDEF-*-ARRAY or immediate slots
                           ,@ (when meta
                                `(:udef-sym ',user-type
-                                 :u-slot-type ',(cs-s-storage-type meta)))
+                                 :u-slot-type ',(cs-s-storage-type c-s)))
                           ,@ (when arr-udef
                                `(:udef-sym ',arr-element-type
-                                 :u-slot-type ',(cs-s-storage-type arr-udef)))
+                                 :u-slot-type ',(cs-s-storage-type (or arr-cs arr-udef))))
                           ,@ (when (slot-def-has-some-mixin? (list* 'make-instance type+args)
                                                              'cs-mixin-vector-storage-slot)
                                `(:index (value-before-incf *slot-nr*)))
@@ -967,8 +970,10 @@
   `(,udef-func :int-to-tagged-udef
                (logior
                  ,@ (loop for slot across slots
+                          for translator = (possibly-udef-value-translation slot)
                           when (typep slot 'cs-mixin-immediate)
-                          collect `(ash ,(cs-s-slot-name slot)
+                          collect `(ash (,translator :udef-or-nil-to-ub-x
+                                                     ,(cs-s-slot-name slot))
                                         ,(- (cs-s-bit-start slot)
                                             sb-impl::+udef-reserved-low-bits+))))))
 
@@ -1015,7 +1020,7 @@
              (max-bits (or (option :max-bits nil)
                            index-bits
                            32))
-             (*current-cs-size* max-bits)
+             (*current-cs-size* index-bits)
              (tmp (sb-int:gensymify* :tmp)) 
              ;;
              (base-constructor (option :base-constructor (sb-int:gensymify* struct-name :-constructor)))
@@ -1042,12 +1047,18 @@
              (needs-index-slot (or index-bits
                                    (plusp vector-storage-slot-count)
                                    (null user-slots)))
-             (all-slots (if needs-index-slot
-                            (list* (get-slot-def `(,index-name 0
-                                                               :type (unsigned-byte ,(or index-bits 32))
-                                                               :allocation :immediate))
-                                   user-slots)
+             (all-slots (cond
+                          (needs-index-slot
+                           (unless index-bits
+                             (setf index-bits 32))
+                            (list* (get-slot-def 
+                                     `(,index-name 0
+                                                   :type (unsigned-byte ,index-bits)
+                                                   :allocation :immediate))
+                                   user-slots))
+                          (t
                             user-slots)))
+             (nil-value (1- (expt 2 index-bits))))
         ;; A sole index slot to identify something is good enough
         (when (zerop (length all-slots))
           (error "Need at least one slot in ~s" struct-name))
@@ -1056,10 +1067,11 @@
         `(progn
            (eval-when (:compile-toplevel :load-toplevel :execute)
              (def-udef-inttype ,struct-name
-                          :max-bits ,max-bits
-                          ;; NIL gets stored in U-B columns as -1 (mod bits) values
-                          ; TODO configurable?
-                          :nil-as-minus-1 t)
+               :max-bits ,max-bits
+               ;; NIL gets stored in U-B columns as -1 (mod bits) values
+               ;; Note: Number of _index_ bits, not total size including other immediate slots!
+               ; TODO configurable?
+               :nil-as-minus-1 ,nil-value)
              ;;
              ;; TODO: loses value upon reload, keep old contents?
              (sb-vm:without-arena
@@ -1067,12 +1079,13 @@
                      (let* ((*bit-index* sb-impl::+udef-reserved-low-bits+)
                             (*slot-nr* 0)
                             (,tmp (vector ,@ all-slots))
-                            (this-size ,max-bits))
+                            (this-size ,index-bits))
                        (declare (ignorable this-size))
                        (make-udef-c-s-metadata
                          :udef          ',struct-name
                          :batch-size    ,batch-size
                          :slots         ,tmp
+                         :index-bits    ,index-bits
                          :var-len-slot  ,(when var-len-sym
                                            `(find-slot-by-name ,tmp ',var-len-sym))
                          :has-index-slot ,(and needs-index-slot t)

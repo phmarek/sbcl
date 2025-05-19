@@ -149,7 +149,7 @@
   (udef-id        0 :type (integer 0 255) :read-only t)
   ;; A slot called TYPEP doesn't work with default args in DEFSTRUCT
   (func         nil :type symbol          :read-only t)
-  (nil?           t :type (member t nil)  :read-only t)
+  (nil?           t :type fixnum          :read-only t)
   (max-bits       0 :type (integer 1 48)  :read-only t))
 
 (defun get-existing-udef-func (name)
@@ -173,7 +173,7 @@
            get-existing-udef-func))
 
 (defmacro def-udef-inttype (name &key id func-sym
-                                 (nil-as-minus-1 t)
+                                 (nil-value t)
                                  (max-bits +udef-usable-remaining-bits+))
   "Defines a new user-defined integer type."
   (multiple-value-bind (func old-id)
@@ -186,7 +186,9 @@
                  (t
                   (register-udef-subtype-id name))))
            (mask (1- (ash 1 max-bits)))
-           (nil? (and nil-as-minus-1 t))
+           (nil? (if (eq t nil-value)
+                     mask
+                     nil-value))
            ;; TODO: use *PACKAGE* instead of the NAMEs package?
            (func-sym (or func-sym
                          (sb-int:symbolicate :UDEF/ name :-OPERATION))))

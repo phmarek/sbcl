@@ -257,9 +257,9 @@ imm-b
     (format t "~s ~s~%" l vec)))
 
 
-#+(or)
 (sb-udef-inttype:def-column-struct (udef-cons
                                      (:index-bits 8)
+                                     (:max-bits 24)
                                      (:initial-size 16))
   (car nil :type udef-cons :allocation :immediate)
   (cdr nil :type udef-cons :allocation :immediate))
