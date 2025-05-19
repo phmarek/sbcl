@@ -61,7 +61,7 @@
   (udef            nil :type symbol          :read-only t)
   (next              0 :type sb-vm:word)
   (allocated         0 :type sb-vm:word)
-  (index-bits        0 :type (integer 1 48))
+  (index-bits      nil :type (or null (integer 1 48)))
   (as-alist        nil :type symbol          :read-only t)
   (p-function      nil :type symbol          :read-only t)
   (batch-size      nil :type (or null
@@ -1130,7 +1130,7 @@
 
 (defmacro expand-c-s-definition (*current-cs-sym* constructor-name base-constructor with-batch-macro)
   (multiple-value-bind (cs udef) (get-cs-metadata-from-symbol *current-cs-sym* t)
-    (with-slots (as-alist p-function batch-size slots) cs
+    (with-slots (as-alist p-function batch-size slots has-index-slot) cs
       (loop for slot across slots
             for slot-name = (cs-s-slot-name slot)
             collect slot-name into slot-names
@@ -1197,17 +1197,21 @@
                          ,tmp)))
                    ;;
                    ;; User-visible constructor function.
-                   (defun ,constructor-name (&key ,@ (rest maker-arg-list))
-                     ,@ (rest maker-checks)
-                     ;; Value before incrementing
-                     ;; Asked from the _current_ metadata in case of COLUMN-STRUCT-RESET
-                     (let* ((,tmp (get-cs-metadata-from-symbol ',*current-cs-sym*))
-                            (,numeric-index (get-new-id-range ,tmp
-                                                              ,(cs-s-slot-name
-                                                                 (cs-meta-var-len-slot cs)))))
-                       ;; First arg is the numeric index!
-                       (,base-constructor ,numeric-index
-                                          ,@ (rest slot-names))))
+                   ,(if has-index-slot
+                        `(defun ,constructor-name (&key ,@ (rest maker-arg-list))
+                           ,@ (rest maker-checks)
+                           ;; Value before incrementing
+                           ;; Asked from the _current_ metadata in case of COLUMN-STRUCT-RESET
+                           (let* ((,tmp (get-cs-metadata-from-symbol ',*current-cs-sym*))
+                                  (,numeric-index (get-new-id-range ,tmp
+                                                                    ,(cs-s-slot-name
+                                                                       (cs-meta-var-len-slot cs)))))
+                             ;; First arg is the numeric index!
+                             (,base-constructor ,numeric-index
+                                                ,@ (rest slot-names))))
+                        `(defun ,constructor-name (&key ,@ maker-arg-list)
+                           ,@ maker-checks
+                           (,base-constructor ,@ slot-names)))
                    ;;
                    ;;
                    (declaim (inline ,p-function))

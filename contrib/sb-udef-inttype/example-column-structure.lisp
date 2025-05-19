@@ -308,3 +308,4 @@ imm-b
   (digit3  0  :type (unsigned-byte 4)  :allocation :immediate)
   (digit4  0  :type (unsigned-byte 4)  :allocation :immediate))
 
+(make-bcd :digit1 2 :digit2 0 :digit3 2 :digit4 5)
