@@ -816,10 +816,11 @@
                                     init)))
                          (t
                           (values `(,func :udef-or-nil-to-ub-x ,init)
-                                  `(make-array
-                                     (list ,arr-len)
-                                     :element-type '(or null ,arr-element-type)
-                                     :initial-element ,init))))
+                                  `(make-array (list ,arr-len)
+                                               :element-type ',(if arr-udef
+                                                                 `(or null ,arr-element-type)
+                                                                 arr-element-type)
+                                               :initial-element ,init))))
                      (values `(,@(if var-len
                                      (list (if arr-udef
                                                ''cs-s-udef-var-array
@@ -1050,7 +1051,7 @@
                                                (symbol-package struct-name))))
              ;;
              (as-alist-sym (sb-int:gensymify* struct-name :-as-alist))
-             (p-func-sym (sb-int:gensymify* struct-name :-p))
+             (p-func-sym (sb-int:symbolicate struct-name :-p))
              ;;
              ;;
              (user-slots (let ((*slot-nr* 0))
@@ -1077,7 +1078,8 @@
                                    user-slots))
                           (t
                             user-slots)))
-             (nil-value (1- (expt 2 index-bits))))
+             (nil-value (when index-bits
+                          (1- (expt 2 index-bits)))))
         ;; A sole index slot to identify something is good enough
         (when (zerop (length all-slots))
           (error "Need at least one slot in ~s" struct-name))
@@ -1210,7 +1212,7 @@
                    ;;
                    (declaim (inline ,p-function))
                    (defun ,p-function (,tmp)
-                     (,(udef-metadata-func udef) :type-p ,tmp))
+                     (,(udef-metadata-func udef) :typep ,tmp))
                    ;;
                    (defun ,as-alist (,tmp)
                      ;; Don't report the index

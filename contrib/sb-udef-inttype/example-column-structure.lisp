@@ -206,7 +206,6 @@
                                      (:max-bits 24)
                                      (:index-bits 8)
                                      (:initial-size 10)
-                                     (:udef-typep imm-p)
                                      (:data-var my-imm-data))
   (b 0 :type (unsigned-byte 16) :allocation :immediate)
   (c 22 :type (array fixnum (b))))
@@ -238,7 +237,8 @@
 imm-b
 (progn
   (sb-udef-inttype:column-struct-reset 'imm)
-  (sb-kernel:get-lisp-obj-address (make-imm :b #x1234)))
+  (format nil "~x"
+          (sb-kernel:get-lisp-obj-address (make-imm :b #x1234))))
 
 (sb-udef-inttype:def-column-struct (udef-arr
                                      (:index-bits 8)
@@ -248,7 +248,7 @@ imm-b
   (vec nil :type (array udef-arr (l))))
 
 (let ((u (make-udef-arr :l 7 :vec (vector nil))))
-  (print u)
+  (format t "~s~%" u)
   (setf (aref (udef-arr-vec u) 2)
         u)
   (setf (udef-arr-vec u :index 4)
@@ -285,4 +285,26 @@ imm-b
         (ignore-errors (make-no-slot-udef))
       (assert (null result))
       (assert (typep e 'type-error)))))
+
+(sb-udef-inttype:def-column-struct (cocoon
+                                     (:index-bits 4)
+                                     (:max-bits 48))
+  (car  nil    :type cocoon :allocation :immediate)
+  (cdr  nil    :type cocoon :allocation :immediate)
+  (cgr  nil    :type cocoon :allocation :immediate))
+
+(let ((a (make-cocoon))
+      (b (make-cocoon))
+      (c (make-cocoon)))
+  (make-cocoon :car a :cdr b :cgr c))
+
+
+
+
+(sb-udef-inttype:def-column-struct (bcd
+                                     (:max-bits 48))
+  (digit1  0  :type (unsigned-byte 4)  :allocation :immediate)
+  (digit2  0  :type (unsigned-byte 4)  :allocation :immediate)
+  (digit3  0  :type (unsigned-byte 4)  :allocation :immediate)
+  (digit4  0  :type (unsigned-byte 4)  :allocation :immediate))
 

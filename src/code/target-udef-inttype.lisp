@@ -146,11 +146,11 @@
       (values nil 0)))
 
 (defstruct udef-metadata
-  (udef-id        0 :type (integer 0 255) :read-only t)
+  (udef-id        0  :type (integer 0 255)   :read-only t)
   ;; A slot called TYPEP doesn't work with default args in DEFSTRUCT
-  (func         nil :type symbol          :read-only t)
-  (nil?           t :type fixnum          :read-only t)
-  (max-bits       0 :type (integer 1 48)  :read-only t))
+  (func         nil  :type symbol            :read-only t)
+  (nil?         nil  :type (or null fixnum)  :read-only t)
+  (max-bits       0  :type (integer 1 48)    :read-only t))
 
 (defun get-existing-udef-func (name)
   "Returns the function symbol, the ID, and the number of bits
@@ -211,9 +211,8 @@
                 (defun ,func-sym (operation input)
                   (ecase operation
                     (:typep
-                     (when
-                      (is-tagged-udef-value ,id input))
-                     t)
+                     (when (is-tagged-udef-value ,id input)
+                       t))
                     (:int-to-tagged-udef
                      (check-type input (integer 0 ,mask))
                      (make-twice-tagged-udef ,id input))
@@ -222,14 +221,20 @@
                     (:udef-or-nil-to-ub-x
                      (if (null input)
                          (if ,nil?
-                             ,mask
+                             ,nil?
                              (error "NIL not allowed for udef ~s" ',name))
                          (check-tagged-udef-value ,id input)))
                     (:ub-x-to-udef-or-nil
                      (if (and ,nil?
-                         (= input ,mask))
+                         (= input ,nil?))
                          nil
-                         (make-twice-tagged-udef ,id input)))))))
+                         (make-twice-tagged-udef ,id input)))
+                    (:mask
+                     ,mask)
+                    (:nil?
+                     ,nil?)
+                    (:udef-id
+                     ,id)))))
             ;;
             (values ',name
                     ,id)))))
