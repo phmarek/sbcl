@@ -242,6 +242,21 @@
     (byte count start)))
 
 
+(defun storage-type-for-udef-sym (sym)
+  (multiple-value-bind (c-s udef) (get-cs-metadata-from-symbol sym)
+    (cond
+      ((and (eq sym *current-cs-sym*)
+            (numberp *current-cs-size*))
+       ;; If the current C-S has no index-bits set up,
+       ;; we can default to the udef size.
+       `(unsigned-byte ,*current-cs-size*))
+      (c-s
+       `(unsigned-byte ,(cs-meta-index-bits c-s)))
+      (udef
+       `(unsigned-byte ,(udef-metadata-max-bits udef)))
+      (t
+       (cs-s-storage-type sym)))))
+
 (defgeneric cs-s-storage-type (item)
   (:documentation
    "Returns the _storage_ type for ITEM.")
@@ -545,9 +560,10 @@
       (when (member kind '(array simple-array))
         (multiple-value-bind (c-s element-udef)
             (get-cs-metadata-from-symbol element-type)
+          (declare (ignore c-s))
           (list element-type
                 dimension
-                c-s element-udef))))))
+                element-udef))))))
 
 
 (declaim (inline return-2nd-argument))
@@ -750,7 +766,7 @@
 (defun get-slot-def (input)
   (multiple-value-bind (name init user-type allocation) (parse-slot input)
     (multiple-value-bind (c-s meta) (get-cs-metadata-from-symbol user-type)
-      (destructuring-bind (&optional arr-element-type arr-len arr-cs arr-udef)
+      (destructuring-bind (&optional arr-element-type arr-len arr-udef)
           (is-simple-1dim-array user-type)
         (multiple-value-bind (type+args init-fn-args)
             (cond
@@ -766,6 +782,7 @@
                            (numberp (second user-type)))
                       (second user-type))
                      ((eq user-type *current-cs-sym*)
+                      ;; TODO: can be dropped?
                       (setf meta :current)
                       *current-cs-size*)
                      (t
@@ -836,10 +853,11 @@
                           ;; for CS-S-UDEF-*-ARRAY or immediate slots
                           ,@ (when meta
                                `(:udef-sym ',user-type
-                                 :u-slot-type ',(cs-s-storage-type c-s)))
+                                 ;; Current C-S is not yet available.
+                                 :u-slot-type ',(storage-type-for-udef-sym user-type)))
                           ,@ (when arr-udef
                                `(:udef-sym ',arr-element-type
-                                 :u-slot-type ',(cs-s-storage-type (or arr-cs arr-udef))))
+                                 :u-slot-type ',(storage-type-for-udef-sym arr-element-type)))
                           ,@ (when (slot-def-has-some-mixin? (list* 'make-instance type+args)
                                                              'cs-mixin-vector-storage-slot)
                                `(:index (value-before-incf *slot-nr*)))
@@ -858,7 +876,7 @@
   ;; all slots with same variable length multiple
   (let ((var-len-args (mapcan (lambda (slot)
                                 (when (slot-def-has-some-mixin? slot 'cs-mixin-variable-sized-array)
-                                  (list 
+                                  (list
                                     (second ; the symbol is quoted!
                                       (getf (nthcdr 2 slot)
                                             :array-len-var)))))
@@ -1016,12 +1034,13 @@
                              batched%))
              ;;
              (index-name (sb-int:gensymify* :%index))
+             ;; Default to UDEF max-bits?
              (index-bits (option :index-bits nil))
              (max-bits (or (option :max-bits nil)
                            index-bits
                            32))
              (*current-cs-size* index-bits)
-             (tmp (sb-int:gensymify* :tmp)) 
+             (tmp (sb-int:gensymify* :tmp))
              ;;
              (base-constructor (option :base-constructor (sb-int:gensymify* struct-name :-constructor)))
              ;;
@@ -1051,7 +1070,7 @@
                           (needs-index-slot
                            (unless index-bits
                              (setf index-bits 32))
-                            (list* (get-slot-def 
+                            (list* (get-slot-def
                                      `(,index-name 0
                                                    :type (unsigned-byte ,index-bits)
                                                    :allocation :immediate))
@@ -1071,7 +1090,7 @@
                ;; NIL gets stored in U-B columns as -1 (mod bits) values
                ;; Note: Number of _index_ bits, not total size including other immediate slots!
                ; TODO configurable?
-               :nil-as-minus-1 ,nil-value)
+               :nil-value ,nil-value)
              ;;
              ;; TODO: loses value upon reload, keep old contents?
              (sb-vm:without-arena

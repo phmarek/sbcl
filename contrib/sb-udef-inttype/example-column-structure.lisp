@@ -38,7 +38,7 @@
 
 ;; Test pre-declaration, for self-referencing stuff
 (sb-udef-inttype::def-udef-inttype bar
-  :nil-as-minus-1 t
+  :nil-value t
   :max-bits 32)
 
 (sb-udef-inttype:def-column-struct (bar
