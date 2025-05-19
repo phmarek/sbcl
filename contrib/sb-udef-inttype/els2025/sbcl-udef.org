@@ -184,8 +184,8 @@ to take only the minimum required space, ie. an =(unsigned-byte N)=.
 
 *Possible Problems*
 
-- No GC of instances ⇒ keep a free list or drop everything
-- =(array UDEF (*))= needs translation ⇒ =SETF AREF= broken
+- No GC of instances → keep a free list or drop everything
+- =(array UDEF (*))= needs translation → =SETF AREF= broken
 
 *To be fixed?*
 - Method dispatch only on "parent" UDEF as of now
