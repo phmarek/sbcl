@@ -1,0 +1,195 @@
+#+LATEX_HEADER: \usepackage{fontspec}
+# #+LATEX: \setmainfont{DejaVu Sans Mono}
+#+LATEX_HEADER: \setmonofont[Mapping=tex-text]{DejaVu Sans Mono}
+#+LATEX_HEADER: \usepackage{setspace}
+#+LATEX: \setstretch{1.0}
+#+LATEX: \linespread{1.0}
+
+#+Title: User-defined Integer Types for SBCL
+#+Subtitle: ELS 2025 / Zürich
+#+Author: Philipp Marek
+
+
+** A machine word
+
+#+BEGIN_SRC
+  +----------------------------------------------+
+  |MSB                                        LSB|
+  +----------------------------------------------+
+  64                                             0
+                                    (not to scale)
+#+END_SRC
+
+
+** SBCL tagging
+
+#+BEGIN_SRC
+  +------------------------------------------+---+
+  |MSB                                       |tag|
+  +------------------------------------------+---+
+  64                                        8|7  0
+#+END_SRC
+
+
+** Another tag
+
+#+BEGIN_SRC
+  +-------------------------------------+----+---+
+  |MSB                                  |udef|tag|
+  +-------------------------------------+----+---+
+  64                                  16|15 8|7  0
+#+END_SRC
+
+** An integer value...
+
+#+BEGIN_SRC
+  +----------+--------------------------+----+---+
+  |MSB       |                    Value |udef|tag|
+  +----------+--------------------------+----+---+
+  64         |47                      16|15 8|7  0
+#+END_SRC
+
+#+BEGIN_SRC lisp
+(def-udef-inttype my-udef-inttype
+  :max-bits 32)
+#+END_SRC
+
+
+** ...can point into large arrays...
+
+
+#+BEGIN_SRC
+  +-slots-+
+  |   0   | -----------------> +--slot-a--+
+  |   1   | --> ┌--slot-b--+   |   a[0]   |
+  |  ...  |     |   b[0]   |   |   a[1]   |
+  +-------+     |   b[1]   |   |   ...    |
+                |   ...    |   |  a[n-1]  |
+                |  b[n-1]  |   +----------+
+                +----------+
+#+END_SRC
+
+...and replace a(n instance) pointer (which would be 64bit).
+
+** (Use 2-level allocations
+
+#+BEGIN_SRC
+  +-slots-+
+  |   0   | ---> +---batch---+
+  |   1   |      |  [ 0- n]  | ---> +--slot-a--+
+  |  ...  |      |  [ n-2n]  |      |   a[0]   |
+  +-------+      |  [2n-3n]  |      |   a[1]   |
+                 |  [ ... ]  |      |   ...    |
+                 |  [...mn]  |      |  a[n-1]  |
+                 +-----------+      +----------+
+#+END_SRC
+for safer/faster extensions)
+
+** DEFSTRUCT equivalent
+
+#+BEGIN_SRC lisp
+(def-column-struct (person
+                     (:index-bits 24)
+                     (:initial-size (* 128 1024)))
+  (name          ""   :type string)
+  (soc-sec-nr     0   :type fixnum)
+  (birthdate      0   :type fixnum)
+  (postal-code    0   :type (unsigned-byte 4))
+  (city          ""   :type string)
+  (address       ""   :type string))
+#+END_SRC
+
+
+
+** Serialize vectors into large vectors
+
+#+BEGIN_SRC lisp
+(def-column-struct (sha256
+                      (:index-bits 24)
+                      (:batch-size (* 128 1024))
+                      (:initial-size (* 1024 1024)))
+  (filename   ""   :type string)
+  (hash-value nil  :type (array (unsigned-byte 8) (32))))
+
+(make-sha256 :filename "foo" :hash-value #( ... ))
+#+END_SRC
+
+
+** Variable Length
+
+#+BEGIN_SRC
+  +----------+------+-------------------+----+---+
+  |MSB       |Length|              Index|udef|tag|
+  +----------+------+-------------------+----+---+
+  64                                  16|15 8|7  0
+#+END_SRC
+
+#+BEGIN_SRC lisp
+(def-column-struct (filename
+                      (:max-bits 32)
+                      (:index-bits 24) ...)
+  (name ""           :type (array character (len)))
+  (len (length name) :type (unsigned-byte 8)
+                     :allocation :immediate))
+
+(make-filename :name "/etc/default/bluetooth")
+; #<UDEF #x16001012; tagged #x14, a FILENAME>
+#+END_SRC
+
+
+** UDEF references
+
+
+#+BEGIN_SRC lisp
+(def-column-struct (person
+                     (:index-bits 16)
+                     (:initial-size 4000))
+  (name     ""   :type string)
+  (father  nil   :type person)
+  (mother  nil   :type person))
+#+END_SRC
+
+\vspace{0.5cm}
+
+UDEF slots and fixed/variable-sized UDEF array slots translate =NIL= ←→ $-1$
+to take only the minimum required space, ie. an =(unsigned-byte N)=.
+
+
+** No (vector) storage at all
+
+#+BEGIN_SRC lisp
+
+(sb-udef-inttype:def-column-struct (bcd
+                                     (:max-bits 48))
+  (digit1  0 :type (unsigned-byte 4) :allocation :immediate)
+  (digit2  0 :type (unsigned-byte 4) :allocation :immediate)
+  (digit3  0 :type (unsigned-byte 4) :allocation :immediate)
+  (digit4  0 :type (unsigned-byte 4) :allocation :immediate))
+
+
+(make-bcd :digit1 2 :digit2 0 :digit3 2 :digit4 5)
+; #<UDEF #x5202; tagged #x2, a BCD>
+#+END_SRC
+
+
+** UDEF Summary
+
+*Features*
+
+- Less work during GC (and =s-l-a-d=!)
+- Type-safe even during runtime
+- Space-efficient for typed slots & UDEF references
+      - Embeds constant- and variable-length vectors
+- Good for import-once-and-serve
+
+*Possible Problems*
+
+- No GC of instances → keep a free list or drop everything
+- =(array UDEF (*))= needs translation → =SETF AREF= broken
+
+*TODOs*
+- "=Missing prototype=" or "=pre-GC failure=" during XC
+- Method dispatch only on "parent" UDEF as of now
+- Auto-terminated vectors (=#\NUL= for C interop)
+- (Un)Boxing for normal arrays/slots needs overloading
+
