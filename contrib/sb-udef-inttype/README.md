@@ -238,3 +238,16 @@ then the storage vector will need to use an element-type `(UNSIGNED-BYTE 64)`,
 which is not quite as compact, but still reduces GC load, compared to
 some 100'000 or millions of `STRING` instances. \
 (Multiplying/shifting the indizes a bit to address a larger backend storage is not implemented yet.)
+
+
+## See also
+
+JEP 450: Compact Object Headers (Experimental)
+    https://openjdk.org/jeps/450
+
+> Reduce the size of object headers in the HotSpot JVM from between 96 and 128 bits down to 64 bits on 64-bit architectures. This will reduce heap size, improve deployment density, and increase data locality.
+
+JEP 519: Compact Object Headers
+    https://openjdk.org/jeps/519
+
+> Change compact object headers from an experimental feature to a product feature.

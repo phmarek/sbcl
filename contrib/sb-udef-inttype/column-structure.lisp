@@ -307,14 +307,15 @@
 
 
 ;(declaim (inline get-new-id-range))
-(defun get-new-id-range (obj &optional count)
+(defun get-new-id-range (obj &optional count one-linear-piece?)
   "Returns the _old_ value, before incrementing"
   (let* ((count (or count 1)))
     (cond
        ;; Single-level allocation or one element only.
        ;; Maybe needs resizing; the constructor will do that.
       ((or (= count 1)
-           (not (cs-meta-batch-size obj)))
+           (not (cs-meta-batch-size obj))
+           (not one-linear-piece?))
        (sb-ext:atomic-incf (cs-meta-next obj) count))
       ;; Check allocation constraint
       ((< (cs-meta-batch-size obj) count)
@@ -329,12 +330,15 @@
        (dotimes (i 15)
          (let* ((cur (cs-meta-next obj))
                 (position-within-batch (mod cur (cs-meta-batch-size obj)))
-                (next-pos (+ position-within-batch count)))
-           (if (< next-pos (cs-meta-batch-size obj))
+                (next-pos (+ cur count)))
+           (if (<= (+ position-within-batch count)
+                   (cs-meta-batch-size obj))
                ;; Get current position
                (let ((chg (sb-ext:compare-and-swap (cs-meta-next obj)
                                                    cur
                                                    next-pos)))
+               (format *trace-output* "at ~d, pos ~d, next ~d~&"
+                       cur position-within-batch next-pos)
                  (if (= chg cur)
                      (return-from get-new-id-range cur)
                      ;; Else raced, retry.
@@ -348,6 +352,8 @@
                  (let ((chg (sb-ext:compare-and-swap (cs-meta-next obj)
                                                      cur
                                                      allocation-end)))
+                 (format *trace-output* "is ~d, next ~d, end ~d, got ~d~&" 
+                         cur next-batch allocation-end chg)
                    (when (= chg cur)
                      (return-from get-new-id-range next-batch)))))))
        (error "can't get new allocation for ~s even after a few retries. broken logic?"

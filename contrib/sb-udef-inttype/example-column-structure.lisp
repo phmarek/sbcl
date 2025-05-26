@@ -47,7 +47,7 @@
                                       (:constructor make-my-bar)
                                       (:base-constructor make-my-bar-base)
                                       (:initial-size 50)
-                                      (:batch-size 170000)
+                                      (:batch-size 1000)
                                       (:with-batch-allocation-name with-bar-batch)
                                       (:data-var my-bar-data))
   (name :name :type symbol)
@@ -63,10 +63,11 @@
   (sb-udef-inttype::with-c-s-slots (bar bar1) (self)
     self))
 
+
 #+(or)
 (progn
   (sb-udef-inttype:column-struct-reset 'bar)
-  (with-bar-batch (mmm :batch-size 20000)
+  (with-bar-batch (mmm :batch-size 1000)
     (mmm)
     (make-my-bar-base 40000
                       'loop 0 #(6 4 1) 0 nil nil nil))
@@ -125,20 +126,19 @@
            (princ
              (format nil "~a: ~d from ~a~%"
                      (sb-thread:thread-os-tid sb-thread:*current-thread*) c n))))
-  (with-bar-batch (alloc :batch-size 4
+  (with-bar-batch (alloc :batch-size 7
                      :new-batch-cb #'dbg)
     (dotimes (j n)
       (let ((id (alloc :i j
-             :name :name
-             :self prev
-             :vec (make-array 3 :initial-element j
-                              :element-type '(unsigned-byte 32))
-             :ref (sb-thread:thread-os-tid sb-thread:*current-thread*))))
+                       :name :name
+                       :self prev
+                       :vec (make-array 3 :initial-element j
+                                        :element-type '(unsigned-byte 32))
+                       :ref (sb-thread:thread-os-tid sb-thread:*current-thread*))))
         (setf prev id)
         (when verbose
           (princ
             (format nil "~s got ~a~%" (bar-ref id) id))))))))
-
 
 (defun assert-bar-self-is-set (b)
   (let ((v (sb-kernel:get-lisp-obj-address b)))
@@ -169,6 +169,7 @@
       (per-thread 11270))
   (sb-udef-inttype:column-struct-clear 'bar)
   ;; Quicken allocation a bit
+  #+(or)
   (setf (sb-udef-inttype::cs-meta-batch-size
           (sb-udef-inttype::get-cs-metadata-from-symbol 'bar))
         1000)
@@ -185,7 +186,7 @@
                   (mapcar #'sb-thread:join-thread threads)))
   (loop with ht = (make-hash-table :test #'eq)
         for i below (sb-udef-inttype:column-struct-last-index 'bar)
-        for u = (to-bar-udef i)
+        for u = (udef/bar-operation :int-to-tagged-udef i)
         do (incf (gethash (bar-ref u) ht 0))
         do (assert-bar-self-is-set u)
         finally
