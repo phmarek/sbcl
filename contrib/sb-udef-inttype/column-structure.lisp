@@ -624,7 +624,8 @@
 
 (defun setup-slot-vector-addressing (c-s slot input vec-name vec-index-sym body-form)
   (let ((input-udef-def  (get-udef-metadata-from-symbol
-                           (cs-meta-udef c-s))))
+                           (cs-meta-udef c-s)))
+        (st-type (cs-s-storage-type slot)))
     (sb-int:with-unique-names (iidx input-index slots-vec batch-var batch-idx inner-idx)
       `(let* ((,iidx ,input)
               (,input-index (cond ((,(udef-metadata-func input-udef-def) :typep ,iidx)
@@ -642,11 +643,13 @@
                   `(values nil ,input-index))
            (declare (ignorable ,batch-idx))
            (let* ((,slots-vec (load-time-slot-vector ',*current-cs-sym*))
-                  (,batch-var (aref ,slots-vec ,(cs-s-index slot)))
-                  ;; (the T ; ,element-vec-type TODO )
+                  (,batch-var (the ,(if (cs-meta-batch-size c-s)
+                                        `(simple-array (simple-array ,st-type (*)) (*))
+                                        `(simple-array ,st-type (*)))
+                                   (aref ,slots-vec ,(cs-s-index slot))))
                   (,vec-name ,(if (cs-meta-batch-size c-s)
-                                  `(aref ,batch-var ,batch-idx)
-                                  `,batch-var))
+                                       `(aref ,batch-var ,batch-idx)
+                                       `,batch-var))
                   (,vec-index-sym (* ,inner-idx
                                      ,(array-slot-index-multiplier slot))))
              (declare (ignorable ,vec-name))
@@ -657,20 +660,27 @@
 (defmethod getter-and-setter-functions ((slot cs-mixin-array) cs)
   (with-slots (accessor-sym slot-name) slot
     (multiple-value-bind (func translate?) (possibly-udef-value-translation slot)
-      `((,accessor-sym (id &key start end index (mode :displaced))
-        (declare (optimize (speed 3) (safety 1) (debug 3))
-                 (type ,*current-cs-sym* id))
-        ,(setup-slot-vector-addressing
-           (get-cs-metadata-from-symbol *current-cs-sym*)
-           slot 'id 'vec 'idx
-           `(let ((max-len ,(get-length-of-array-slot-form slot cs 'id)))
-              (assert (typep index `(or null
-                                        (integer 0 ,max-len))))
-              (assert (typep start `(or null
-                                       (integer 0 ,max-len))))
-              (assert (typep end `(or null
-                                     (integer ,(or start 0) ,max-len))))
-              (if index
+      (flet 
+          ((access-body (body)
+             (setup-slot-vector-addressing
+               (get-cs-metadata-from-symbol *current-cs-sym*)
+               slot 'id 'vec 'idx
+               `(let ((max-len ,(get-length-of-array-slot-form slot cs 'id)))
+                  (check-type index (or null sb-int:index))
+                  (when index
+                    (assert (<= index max-len)))
+                  (check-type start (or null sb-int:index))
+                  (when start
+                    (assert (<= start max-len)))
+                  (check-type end   (or null sb-int:index))
+                  (when end
+                    (assert (<= (or start 0) end max-len)))
+                  , body))))
+        `((,accessor-sym (id &key start end index (mode :displaced))
+           (declare (optimize (speed 3) (safety 1) (debug 3))
+                    (type ,*current-cs-sym* id))
+           ,(access-body
+              `(if index
                   (values (,func :int-to-tagged-udef
                                  (aref vec (+ idx index))))
                   (let* ((real-start (+ idx (or start 0)))
@@ -680,9 +690,9 @@
                       (:displaced
                        (values
                          ,(let ((backend-data `(make-array len
-                                          :element-type ',(cs-s-storage-type slot)
-                                          :displaced-to vec
-                                          :displaced-index-offset real-start)))
+                                                           :element-type ',(cs-s-storage-type slot)
+                                                           :displaced-to vec
+                                                           :displaced-index-offset real-start)))
                             (if translate?
                                 ;; TODO: How to get changes reflected into the original
                                 ;; if there's a translation, eg. for an UDEF??
@@ -702,39 +712,30 @@
                                       (lambda (x)
                                         (,func :ub-x-to-udef-or-nil x))
                                       ,backend-data)
-                                backend-data))))))))))
-      ((setf ,accessor-sym) (new id &key start end index)
-        (declare (optimize (speed 3) (safety 1) (debug 3))
-                 (type ,*current-cs-sym* id))
-        ,(setup-slot-vector-addressing
-           (get-cs-metadata-from-symbol *current-cs-sym*)
-           slot 'id 'vec 'idx
-           `(let ((max-len ,(get-length-of-array-slot-form slot cs 'id)))
-              (assert (typep index `(or null
-                                        (integer 0 ,max-len))))
-              (assert (typep start `(or null
-                                        (integer 0 ,max-len))))
-              (assert (typep end `(or null
-                                      (integer ,(or start 0) ,max-len))))
-              (if index
-                  (setf (aref vec (+ index idx))
-                        (,func :udef-or-nil-to-ub-x new))
-                  (let* ((real-start (+ idx (or start 0)))
-                         (real-end (+ idx (or end max-len)))
-                         #+(or)
-                         (len (- real-end real-start)))
-                    (loop for el across new
-                          for i upfrom real-start below real-end
-                          do (setf (aref vec i)
-                                   (,func :udef-or-nil-to-ub-x el)))
-                    #+(or) ;; TODO: with a MAP for translation faster than a loop?
-                    (replace
-                      (make-array len
-                                  :element-type ',(cs-s-storage-type slot)
-                                  :displaced-to vec
-                                  :displaced-index-offset real-start)
-                      new)
-                    new)))))))))
+                                backend-data)))))))))
+          ((setf ,accessor-sym) (new id &key start end index)
+            (declare (optimize (speed 3) (safety 1) (debug 3))
+                     (type ,*current-cs-sym* id))
+            ,(access-body
+               `(if index
+                   (setf (aref vec (+ index idx))
+                         (,func :udef-or-nil-to-ub-x new))
+                   (let* ((real-start (+ idx (or start 0)))
+                          (real-end (+ idx (or end max-len)))
+                          #+(or)
+                          (len (- real-end real-start)))
+                     (loop for el across new
+                           for i upfrom real-start below real-end
+                           do (setf (aref vec i)
+                                    (,func :udef-or-nil-to-ub-x el)))
+                     #+(or) ;; TODO: with a MAP for translation faster than a loop?
+                     (replace
+                       (make-array len
+                                   :element-type ',(cs-s-storage-type slot)
+                                   :displaced-to vec
+                                   :displaced-index-offset real-start)
+                       new)
+                     new)))))))))
 
 
 (defmethod getter-and-setter-functions ((slot cs-mixin-vector-storage-slot) cs)
