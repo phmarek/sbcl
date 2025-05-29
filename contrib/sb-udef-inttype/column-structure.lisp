@@ -724,6 +724,7 @@
                           (real-end (+ idx (or end max-len)))
                           #+(or)
                           (len (- real-end real-start)))
+                     (declare (type (array T (*)) new))
                      (loop for el across new
                            for i upfrom real-start below real-end
                            do (setf (aref vec i)
@@ -1058,7 +1059,8 @@
                                                (symbol-package struct-name))))
              ;;
              (as-alist-sym (sb-int:gensymify* struct-name :-as-alist))
-             (p-func-sym (sb-int:symbolicate struct-name :-p))
+             (p-func-sym (option :udef-typep
+                                 (sb-int:symbolicate struct-name :-p)))
              ;;
              ;;
              (user-slots (let ((*slot-nr* 0))
