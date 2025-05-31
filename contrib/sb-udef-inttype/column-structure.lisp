@@ -264,7 +264,8 @@
     (error "No storage for NIL"))
   (:method ((slot cs-slot-common))
     (cs-s-orig-type slot))
-  (:method ((slot cs-mixin-udef))
+  ;; Has priority before cs-mixin-array!
+  (:method :around ((slot cs-mixin-udef))
     (cs-s-u-slot-type slot))
   (:method ((u (eql :current)))
     `(unsigned-byte ,*current-cs-size*))

@@ -56,7 +56,7 @@
   (typed-ref% 4 :type (unsigned-byte 32))
   (ref *no-foo* :type T)
   (self nil :type bar)
-;;  (self-vec nil :type (array bar (4))) ;; TODO
+  (self-vec nil :type (array bar (4))) ;; TODO
   (udef *no-foo* :type foo))
 
 (defun fff (bar1)
