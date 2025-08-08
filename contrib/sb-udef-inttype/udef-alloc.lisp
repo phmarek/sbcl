@@ -12,6 +12,9 @@
 (in-package "SB-UDEF-INTTYPE")
 
 
+(defvar *workaround-type-def* 1)
+
+
 ;;; High-level interface -- multiple sub-types
 ;;
 ;; Apart from the bits used by udef-inttype-lowtag,
@@ -67,7 +70,6 @@
 ;; with superclass ctype, (:metaclass sb-kernel::structure-class))
 ;; #<SIMPLE-ERROR "~S instance constructor called in a non-system file" {1002966753}>
 ;
-;(defclass udef-inttype () ())
 ;; SB-KERNEL:CTYPE instance constructor called in a non-system file
 ;;    [Condition of type SIMPLE-ERROR]
 
@@ -122,7 +124,8 @@
 (defun check-tagged-udef-value (tag udef)
   (declare (optimize (speed 3) (debug 0) (safety 1)))
   (or (is-tagged-udef-value tag udef)
-      (error "need a udef with tag #x~x, not a ~s" tag udef)))
+      (error "need a udef with tag #x~x~@[ (a ~s)~], not a ~s"
+             tag (aref *udef-types* tag) udef)))
 
 (defstruct udef-metadata
   (udef-id        0  :type (integer 0 255)   :read-only t)
@@ -147,6 +150,7 @@
            udef-metadata-func
            udef-metadata-udef-sym
            udef-metadata-max-bits
+           udef-inttype-parent
            make-twice-tagged-udef
            check-tagged-udef-value
            get-existing-udef-func))
@@ -174,7 +178,17 @@
          ;; (DEBUG 1) is necessary to keep the argument and result types
          `(progn
             (eval-when (:compile-toplevel :load-toplevel :execute)
-              (deftype ,name () 'sb-int:udef-inttype)
+              (case  *workaround-type-def*
+                (1
+                 (deftype ,name () 'sb-int:udef-inttype))
+                (2
+                 (defclass ,name (sb-int::udef-inttype-parent)
+                   ())
+                 (setf (slot-value (find-class ',name)
+                                   'sb-pcl::prototype)
+                       (make-twice-tagged-udef ,id 0)))
+                (t
+                  (funcall *workaround-type-def* ',name ,id)))
               ;;
               (assert (= ,id
                          (register-udef-subtype-id ',name :preferred ,id)))
@@ -207,7 +221,8 @@
                      (if (and ,nil?
                          (= input ,nil?))
                          nil
-                         (make-twice-tagged-udef ,id input)))
+                         (the ,name
+                              (make-twice-tagged-udef ,id input))))
                     (:mask
                      ,mask)
                     (:nil?
@@ -231,7 +246,6 @@
 
 (sb-ext:define-hash-table-test udef-eq hash-udef)
 
-
 (defmethod print-object ((obj sb-int:udef-inttype) stream)
   (let* ((v (sb-kernel:get-lisp-obj-address obj))
          (utag (ldb (byte +udef-tag-bits+ sb-vm:n-widetag-bits) v)))
@@ -244,3 +258,7 @@
 ;; TODO: (udef-tag-p udef tag) with compiler-macro
 
 ;; TODO: subclasses for MOP methods
+(defclass udef-inttype-parent (cl:t) ())
+(setf (slot-value (find-class 'udef-inttype-parent)
+                  'sb-pcl::prototype)
+      (sb-kernel:%make-lisp-obj udef-inttype-lowtag))

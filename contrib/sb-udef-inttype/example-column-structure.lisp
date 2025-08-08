@@ -6,6 +6,9 @@
 
 (require :sb-udef-inttype)
 
+#+(or)
+(setf sb-impl::*workaround-type-def* 2)
+
 (sb-udef-inttype:def-column-struct (foo
                                      (:index-bits 17)
                                      (:initial-size 10)

@@ -1139,6 +1139,16 @@ between the ~A definition and the ~A definition"
      (udef-inttype
       :predicate udef-inttype-p
       :codes (,sb-vm::udef-inttype-lowtag)
+      ;; :translation udef-inttype
+      ;; :translation gets us
+      ;;   ; Standard output:
+      ;;   ; x-compiling file "src/code/pred.lisp":
+      ;;   ; compilation aborted after 0:00:00.619
+      ;;   ; Error output:
+      ;;     failed AVER: (NOT (CONTAINS-UNKNOWN-TYPE-P PARSE))
+      ;;   If you see this and are an SBCL developer, then it is probable that you have
+      ;;   made a change to the system that has broken the ability for SBCL to compile,
+      ;;   usually by removing an assumed invariant of the system, but sometimes by making
       :prototype-form 0 ; gets filled in later
       )
      (bignum

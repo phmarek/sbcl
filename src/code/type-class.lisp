@@ -749,6 +749,7 @@
                              (hairy-type ctype-contains-hairy)
                              (unknown-type (logior ctype-contains-unknown ctype-contains-hairy))
                              ((simd-pack-type simd-pack-256-type alien-type-type) 0)
+                             ;; TODO: udef-type?
                              (negation-type '(type-flags type))
                              (array-type '(type-flags element-type)))
                           ,@(cdr private-ctor-args))))))))
