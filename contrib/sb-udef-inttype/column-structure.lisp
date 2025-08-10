@@ -1246,8 +1246,11 @@
             for slot-name = (cs-s-slot-name slot)
             collect slot-name into slot-names
             collect `(,slot-name ,(cs-s-init-form slot)) into maker-arg-list
-            collect `(check-type ,slot-name
-                                 ,(cs-s-input-type slot)) into maker-checks
+            ;; These CHECK-TYPEs prohibit some inputs, eg. passing in
+            ;; a BASE-STRING when an (ARRAY CHAR (x)) is announced,
+            ;; so avoid them for now
+            ;;  collect `(check-type ,slot-name
+            ;;                       ,(cs-s-input-type slot)) into maker-checks
             appending (getter-and-setter-functions slot cs) into accessors
             finally
             (return
@@ -1312,7 +1315,7 @@
                    ;; User-visible constructor function.
                    ,(if has-index-slot
                         `(defun ,constructor-name (&key ,@ (rest maker-arg-list))
-                           ,@ (rest maker-checks)
+                           ;; ,@ (rest maker-checks)
                            ;; Value before incrementing
                            ;; Asked from the _current_ metadata in case of COLUMN-STRUCT-RESET
                            (let* ((,tmp (get-cs-metadata-from-symbol ',*current-cs-sym*))
@@ -1329,7 +1332,7 @@
                              (,base-constructor ,numeric-index
                                                 ,@ (rest slot-names))))
                         `(defun ,constructor-name (&key ,@ maker-arg-list)
-                           ,@ maker-checks
+                           ;; ,@ maker-checks
                            (,base-constructor ,@ slot-names)))
                    ;;
                    ;;
