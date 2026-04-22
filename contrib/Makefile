@@ -3,7 +3,7 @@ vpath %.fasl ../obj/sbcl-home/contrib/
 contribs = sb-posix sb-bsd-sockets sb-introspect sb-cltl2 sb-aclrepl \
      sb-sprof sb-capstone sb-md5 sb-capstone sb-executable sb-gmp sb-mpfr \
      sb-queue sb-rotate-byte sb-rt sb-simple-streams sb-concurrency sb-cover \
-     sb-simd sb-grovel sb-perf sb-manual asdf
+     sb-simd sb-grovel sb-perf sb-manual asdf sb-udef-immediate
 
 active_contribs = $(filter-out $(SBCL_CONTRIB_BLOCKLIST),$(contribs))
 
@@ -19,8 +19,8 @@ sb-perf.fasl: sb-posix.fasl
 sb-mpfr.fasl: sb-gmp.fasl
 sb-queue.fasl: sb-concurrency.fasl
 sb-simple-streams.fasl: sb-posix.fasl sb-bsd-sockets.fasl
+sb-udef-immediate.fasl: sb-introspect.fasl
 sb-grovel.fasl: asdf.fasl # for building the module, not for our build
-
 sb_manual_module_deps = sb-aclrepl sb-bsd-sockets sb-cltl2 sb-concurrency \
     sb-cover sb-grovel sb-introspect sb-md5 sb-posix sb-rotate-byte \
     sb-queue sb-sprof sb-simd sb-simple-streams
