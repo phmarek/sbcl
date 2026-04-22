@@ -3,7 +3,7 @@ vpath %.fasl ../obj/sbcl-home/contrib/
 contribs = sb-posix sb-bsd-sockets sb-introspect sb-cltl2 sb-aclrepl \
      sb-sprof sb-capstone sb-md5 sb-capstone sb-executable sb-gmp sb-mpfr \
      sb-queue sb-rotate-byte sb-rt sb-simple-streams sb-concurrency sb-cover \
-     sb-simd sb-grovel sb-perf sb-manual asdf
+     sb-simd sb-grovel sb-perf sb-manual asdf sb-udef-immediate
 
 active_contribs = $(filter-out $(SBCL_CONTRIB_BLOCKLIST),$(contribs))
 
@@ -24,6 +24,7 @@ sb-manual.fasl: sb-aclrepl.fasl sb-bsd-sockets.fasl sb-cltl2.fasl \
 	sb-concurrency.fasl sb-cover.fasl sb-grovel.fasl sb-introspect.fasl \
 	sb-md5.fasl sb-posix.fasl sb-rotate-byte.fasl sb-queue.fasl \
 	sb-sprof.fasl
+sb-udef-immediate.fasl: sb-introspect.fasl
 
 # Notes:
 # 1. Invoking $(MAKE) for nested make eliminates a warning about jobserver mode.
